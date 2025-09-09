@@ -710,3 +710,12 @@ def test_slurm_version(stdout_data, exception_to_raise, expected_version, mocker
     
     assert version == expected_version
     mock_run.assert_called_once()
+
+def test_node_accelerator_topology():
+    cfg = TstCfg(
+        nodeset={
+            "n": TstNodeset(accelerator_topology="2x2"),
+        }
+    )
+    lkp = util.Lookup(cfg)
+    assert lkp.node_accelerator_topology("c-n-0") == "2x2"

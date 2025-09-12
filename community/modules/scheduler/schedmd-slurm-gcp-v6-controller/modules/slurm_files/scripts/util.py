@@ -2273,3 +2273,6 @@ def slurm_version_gte(v1: str, v2: str) -> bool:
     except (ValueError, IndexError):
         log.error(f"Could not parse Slurm versions '{v1}' or '{v2}'. Assuming older version.")
         return False
+
+def is_a4x_node(node: str) -> bool:
+   return lookup().node_nodeset(node).machine_type.startswith("a4x-")

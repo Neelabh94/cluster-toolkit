@@ -29,7 +29,7 @@ from util import (
 from util import lookup
 import tpu
 import mig_flex
-import mig_a4
+import mig_slice_flex
 import watch_delete_vm_op
 
 log = logging.getLogger()
@@ -88,12 +88,12 @@ def suspend_nodes(nodes: List[str]) -> None:
 
     other_nodes, tpu_nodes = util.separate(lkp.node_is_tpu, nodes)
     bulk_nodes, flex_nodes = util.separate(lkp.is_flex_node, other_nodes)
-    a4x_flex_nodes, other_flex_nodes = util.separate(util.is_a4x_node, flex_nodes)
+    slice_mig_nodes, other_flex_nodes = util.separate(util.is_slice_flex_node, flex_nodes)
 
     mig_flex.suspend_flex_nodes(other_flex_nodes, lkp)
     delete_instances(bulk_nodes)
     tpu.delete_tpu_instances(tpu_nodes)
-    mig_a4.suspend_slice_nodes(lkp, a4x_flex_nodes)
+    mig_slice_flex.suspend_slice_nodes(lkp, slice_mig_nodes)
 
 
 def main(nodelist):

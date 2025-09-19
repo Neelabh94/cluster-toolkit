@@ -1700,33 +1700,48 @@ class Lookup:
     def node_is_gke(self, node_name=None) -> bool:
         return self.nodeset_is_gke(self.node_nodeset(node_name))
 
-    def is_a4_dws_flex_mig(self, mig_obj: Any) -> bool:
+    def is_dws_flex_mig(self, mig_obj: Any) -> bool:
         """
-        Checks if a given MIG object is for an A4 slice AND was provisioned
+        Checks if a given MIG object is for an slice AND was provisioned
         for DWS Flex.
         """
-        # mig_obj could be a dict from the API or the MIG dataclass from mig_a4.py
+        # mig_obj could be a dict from the API or the MIG dataclass from mig_slice_flex.py
         versions = getattr(mig_obj, 'versions', mig_obj.get('versions'))
         mig_name = getattr(mig_obj, 'name', mig_obj.get('name'))
         if not versions or not mig_name:
             return False
         try:
-            # Check 1: Verify it's an A4 MIG by checking the instance template's machine type.
-            template_url = versions[0] if isinstance(versions[0], str) else versions[0].get('instanceTemplate')
-            if not template_url:
-                return False
-            template_details = self.template_info(template_url)
-            machine_type = template_details.machineType
-            if not machine_type.startswith("a4x-"):
-                return False
-            # Check 2: Find the source nodeset by its name and check its DWS Flex flag.
+            # Find the source nodeset by its name
+            found_nodeset = None
             for ns_name, nodeset in self.cfg.nodeset.items():
                 mig_prefix = f"{self.cfg.slurm_cluster_name}-{ns_name}-"
                 if mig_name.startswith(mig_prefix):
-                    # Found the matching nodeset. Check its DWS flag.
-                    return nodeset.dws_flex.enabled
-            # If no matching nodeset was found in the loop.
-            return False
+                    found_nodeset = nodeset
+                    break
+
+            if not found_nodeset:
+                return False
+
+            # Check if DWS Flex is enabled for the nodeset
+            if not found_nodeset.dws_flex.enabled:
+                return False
+
+            # Check accelerator topology from nodeset
+            if found_nodeset.accelerator_topology != "1x64":
+                return False
+
+            # Verify it's an A4 MIG by checking the instance template's GPU count.
+            template_url = versions[0] if isinstance(versions[0], str) else versions[0].get('instanceTemplate')
+            if not template_url:
+                return False
+
+            template_details = self.template_info(template_url)
+            gpu = get_template_gpu(template_details)
+
+            if not gpu or gpu.count != 4:
+                return False
+
+            return True
         except Exception as e:
             log.error(f"Could not determine DWS Flex status for MIG '{mig_name}': {e}")
             return False
@@ -2261,5 +2276,25 @@ def scontrol_reconfigure(lkp: Lookup) -> None:
     log.info("Running scontrol reconfigure")
     run(f"{lkp.scontrol} reconfigure")
 
-def is_a4x_node(node: str) -> bool:
-   return lookup().node_nodeset(node).machine_type.startswith("a4x-")
+def is_slice_flex_node(node: str) -> bool:
+    """
+    Checks if a node is an A4X node configured for DWS Flex.
+    This is determined by checking the nodeset's configuration for DWS Flex,
+    the accelerator topology, and the GPU count of the machine type.
+    """
+    try:
+        lkp = lookup()
+        nodeset = lkp.node_nodeset(node)
+
+        # Check for DWS Flex and specific accelerator topology
+        if not (nodeset.dws_flex.enabled and nodeset.accelerator_topology == "1x64"):
+            return False
+
+        # Verify GPU count from the instance template
+        template_info = lkp.node_template_info(node)
+        gpu = get_template_gpu(template_info)
+
+        return gpu is not None and gpu.count == 4
+    except Exception as e:
+        log.debug(f"Could not determine if node '{node}' is an A4X node: {e}")
+        return False

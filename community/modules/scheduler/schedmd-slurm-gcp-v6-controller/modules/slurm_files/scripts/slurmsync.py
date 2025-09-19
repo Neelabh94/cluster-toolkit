@@ -45,7 +45,7 @@ from util import (
 from util import lookup
 from suspend import delete_instances
 import tpu
-import mig_a4
+import mig_slice_flex
 import conf
 import watch_delete_vm_op
 
@@ -166,7 +166,7 @@ def get_mig_from_node(nodename: str):
     zone = lookup().zone.split("/")[-1]
 
     expected_mig_name = f"{node_prefix}-{sid}"
-    migs_in_zone = mig_a4.migs(lookup(), zone)
+    migs_in_zone = mig_slice_flex.migs(lookup(), zone)
     for mig_name, mig_obj in migs_in_zone.items():
         if mig_name == expected_mig_name:
             return mig_obj
@@ -275,7 +275,7 @@ def get_node_action(nodename: str) -> NodeAction:
     lkp = lookup()
     state = lkp.node_state(nodename)
 
-    if mig_a4.is_slice_node(nodename):
+    if mig_slice_flex.is_slice_node(nodename):
         return _find_mig_node_action(nodename)
 
     if lkp.node_is_gke(nodename):
@@ -338,7 +338,7 @@ def get_node_action(nodename: str) -> NodeAction:
         if age < threshold:
             log.info(f"{nodename} not marked as orphan, it started less than {threshold.seconds}s ago ({age.seconds}s)")
             return NodeActionUnchanged()
-        if mig_a4.is_slice_node(nodename):
+        if mig_slice_flex.is_slice_node(nodename):
             return NodeActionDown(reason="Orphaned slice node, awaiting group action")
         return NodeActionDelete()
     elif state is None:
@@ -416,17 +416,17 @@ def sync_migs():
 
     all_migs = {}
     for zone in zones:
-        migs = mig_a4.migs(lkp, zone)
+        migs = mig_slice_flex.migs(lkp, zone)
         all_migs.update(migs)
 
     migs_to_delete = []
     for mig_name, mig_obj in all_migs.items():
-        if not lkp.is_a4_dws_flex_mig(mig_obj):
+        if not lkp.is_dws_flex_mig(mig_obj):
             continue
 
         cluster, nodeset, mig_index = mig_obj.name.split('-')
 
-        result = mig_a4.mig_details(lookup(), mig_obj)
+        result = mig_slice_flex.mig_details(lookup(), mig_obj)
         status = result.get("status", {})
         if not status.get("isStable", False):
             log.info(f"Mig {mig_name} isn't stable yet")
@@ -435,7 +435,7 @@ def sync_migs():
         mig_nodes = []
         for node in slurm_nodes:
             # check if it's in the right nodeset
-            if (lkp.node_prefix(node) == f"{cluster}-{nodeset}") & mig_a4.is_slice_node(node):
+            if (lkp.node_prefix(node) == f"{cluster}-{nodeset}") & mig_slice_flex.is_slice_node(node):
                 accelerator_topology = lkp.node_accelerator_topology(node)
                 topo = int(accelerator_topology.split("x")[1]) // lkp.node_template_info(node).gpu.count
                 # check if it's in the right slice id
@@ -464,8 +464,8 @@ def sync_migs():
             continue
     
     if len(migs_to_delete) > 0:
-        mig_a4.delete_migs(lkp, migs_to_delete)
-        mig_a4.delete_workload_policies(lkp, migs_to_delete)
+        mig_slice_flex.delete_migs(lkp, migs_to_delete)
+        mig_slice_flex.delete_workload_policies(lkp, migs_to_delete)
 
 
 def sync_placement_groups():

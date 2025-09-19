@@ -44,7 +44,7 @@ from util import (
 from util import lookup, ReservationDetails
 import tpu
 import mig_flex
-import mig_a4
+import mig_slice_flex
 
 log = logging.getLogger()
 
@@ -299,7 +299,7 @@ def _filter_out_and_handle_slice_nodes(nodes: List[str], resume_data: Optional[R
       to be resumed via bulk instance creation.
     """
     lkp = lookup()
-    other_nodes, slice_nodes = util.separate(mig_a4.is_slice_node, nodes)
+    other_nodes, slice_nodes = util.separate(mig_slice_flex.is_slice_node, nodes)
 
     if not slice_nodes:
         return other_nodes
@@ -310,7 +310,7 @@ def _filter_out_and_handle_slice_nodes(nodes: List[str], resume_data: Optional[R
 
     if a4x_dws_nodes:
         log.info(f"Resuming A4X DWS Flex nodes via MIGs: {to_hostlist(a4x_dws_nodes)}")
-        mig_a4.resume_slice_nodes(lkp, a4x_dws_nodes, resume_data)
+        mig_slice_flex.resume_slice_nodes(lkp, a4x_dws_nodes, resume_data)
 
     return other_nodes + a4x_bulk_nodes
 

@@ -85,8 +85,12 @@ output "nodeset" {
   }
 
   precondition {
-    condition     = startswith(var.machine_type, "a4x-") && (!var.dws_flex.enabled || (var.node_count_dynamic_max + var.node_count_static) % 16 == 0)
-    error_message = "For A4X, if DWS Flex is enabled, sum of `node_count_dynamic_max` and `node_count_static` should be a multiple of 16."
+    condition = !var.dws_flex.enabled || var.accelerator_topology == null || (try((var.node_count_static + var.node_count_dynamic_max) %
+    (tonumber(split("x", var.accelerator_topology)[1]) / local.guest_accelerator[0].count) == 0, false))
+    error_message = <<-EOD
+    "With DWS Flex and accelerator_topology, the sum of `node_count_static` and `node_count_dynamic_max` must be a multiple of the number 
+    of VMs per topology unit (accelerators in topology / accelerators per VM)."
+    EOD
   }
 
   precondition {

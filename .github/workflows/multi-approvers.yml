@@ -64,7 +64,7 @@ jobs:
           }
 
     - name: 'Multi-approvers'
-      uses: 'abcxyz/actions/.github/actions/multi-approvers'
+      uses: "abcxyz/actions/.github/actions/multi-approvers@main"
       with:
         team: 'hpc-toolkit'
         token: '${{ steps.minty.outputs.token }}'

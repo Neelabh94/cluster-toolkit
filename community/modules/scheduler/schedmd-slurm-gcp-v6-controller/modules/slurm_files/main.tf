@@ -189,6 +189,7 @@ locals {
     "load_bq.py",
     "local_pubsub.py",
     "mig_flex.py",
+    "mig_slice_flex.py",
     "resume_wrapper.sh",
     "resume.py",
     "setup_network_storage.py",

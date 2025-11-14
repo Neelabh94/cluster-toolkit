@@ -92,18 +92,25 @@ def create_mig_request(lkp: util.Lookup, mig: MIG):
     zone=mig.zone,
     body = dict(
       name=mig.name,
-      versions=[dict(
-        instanceTemplate=mig.versions[0])],
-      targetSize=mig.target_size,
-      # Sensible defaults, allow for changes when needed
+      versions=[dict(instanceTemplate=mig.versions[0])],
+      targetSize=0, # Start empty
       instanceLifecyclePolicy= { "defaultActionOnFailure": "DO_NOTHING" },
       resourcePolicies = {
        "workloadPolicy": f"projects/{lkp.project}/regions/{region}/resourcePolicies/{workload_policy_name}"
       },
     )
   )
-
   return mig_req
+
+
+def resize_mig_atomic_request(lkp: util.Lookup, mig_name: str, zone: str, new_size: int):
+    return lkp.compute.instanceGroupManagers().resize(
+        project=lkp.project,
+        zone=zone,
+        instanceGroupManager=mig_name,
+        size=new_size,
+        targetSizePolicyMode="BULK"  # <--- The Critical Requirement
+    )
 
 
 def _allocate_node_to_mig(lkp: util.Lookup, nodes: List[str]) -> Dict[str, List[str]]:
@@ -161,6 +168,9 @@ def resume_slice_nodes(lkp: util.Lookup, nodes: List[str], resume_data):
     submit_batch_request(mig_requests, resume_data)
    
 def _resume_slice_nodes_requests(lkp: util.Lookup, mig_name: str, nodes: List[str]):
+  if len(nodes) % 16 != 0:
+    log.error(f"A4X Request Error: Requested {len(nodes)} nodes. A4X Flex Provisioning requires multiples of 16.")
+    return None, None
   assert nodes
   model = nodes[0]
   ns = lkp.node_nodeset(model)
@@ -176,7 +186,12 @@ def _resume_slice_nodes_requests(lkp: util.Lookup, mig_name: str, nodes: List[st
       zone=zone,
       versions=[ns.instance_template])
     mig_req = create_mig_request(lkp, mig)
+    resize_mig_atomic_request(lkp, mig_name, zone, len(nodes))
     workload_req = create_workload_policy_request(lkp, ns, ns["accelerator_topology"])
+
+  elif mig.target_size != len(nodes):
+      # MIG exists but size is wrong (e.g., 0). Scale it up.
+      mig_req = resize_mig_atomic_request(lkp, mig_name, zone, len(nodes))
 
   return mig_req, workload_req
 

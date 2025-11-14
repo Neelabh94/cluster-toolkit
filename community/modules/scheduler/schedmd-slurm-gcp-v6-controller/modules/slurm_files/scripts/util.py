@@ -1702,14 +1702,20 @@ class Lookup:
 
     def is_dws_flex_mig(self, mig_obj: Any) -> bool:
         """
-        Checks if a given MIG object is for an slice AND was provisioned
+        Checks if a given MIG object is for a slice AND was provisioned
         for DWS Flex.
         """
-        # mig_obj could be a dict from the API or the MIG dataclass from mig_slice_flex.py
-        versions = getattr(mig_obj, 'versions', mig_obj.get('versions'))
-        mig_name = getattr(mig_obj, 'name', mig_obj.get('name'))
+        # Fix: Handle both Dictionary (API) and Dataclass (Internal)
+        if isinstance(mig_obj, dict):
+            versions = mig_obj.get('versions')
+            mig_name = mig_obj.get('name')
+        else:
+            versions = getattr(mig_obj, 'versions', None)
+            mig_name = getattr(mig_obj, 'name', None)
+
         if not versions or not mig_name:
             return False
+
         try:
             # Find the source nodeset by its name
             found_nodeset = None

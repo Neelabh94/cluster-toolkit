@@ -252,3 +252,29 @@ variable "enable_object_retention" {
   type        = bool
   default     = false
 }
+
+variable "anywhere_cache" {
+  description = "A list of Anywhere Cache configurations."
+  type = list(object({
+    zone             = string
+    ttl              = optional(string, "86400s")
+    admission_policy = optional(string, "admit-on-first-miss")
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for cache in var.anywhere_cache : contains(
+        ["admit-on-first-miss", "admit-on-second-miss"],
+        coalesce(cache.admission_policy, "admit-on-first-miss")
+      )
+    ])
+    error_message = "Allowed policies are 'admit-on-first-miss' or 'admit-on-second-miss'."
+  }
+}
+
+variable "enable_anywhere_cache" {
+  description = "If true, enables Anywhere Cache for the bucket."
+  type        = bool
+  default     = false
+}

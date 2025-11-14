@@ -124,3 +124,14 @@ resource "google_storage_bucket_iam_binding" "viewers" {
   role    = "roles/storage.objectViewer"
   members = var.viewers
 }
+
+resource "google_storage_anywhere_cache" "cache_instances" {
+  for_each = var.enable_anywhere_cache ? { for cache in var.anywhere_cache : cache.zone => cache } : {}
+
+  provider = google-beta
+
+  bucket           = google_storage_bucket.bucket.name
+  zone             = each.key
+  ttl              = each.value.ttl
+  admission_policy = each.value.admission_policy
+}

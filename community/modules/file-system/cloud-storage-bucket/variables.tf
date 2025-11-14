@@ -252,3 +252,42 @@ variable "enable_object_retention" {
   type        = bool
   default     = false
 }
+
+variable "anywhere_cache" {
+  description = <<-EOT
+    A list of Anywhere Cache configurations.
+    When you create a cache for a bucket, the cache must be created in a zone within the location of your bucket.
+    For example, if your bucket is located in the us-east1 region, you can create a cache in us-east1-b but not us-central1-c.
+    If your bucket is located in the ASIA dual-region, you can create a cache in any zones that make up the asia-east1 and asia-southeast1 regions.
+    This validation only works for single regions.
+    EOT
+  type = list(object({
+    zone             = string
+    ttl              = optional(string, "86400s")
+    admission_policy = optional(string, "admit-on-first-miss")
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for cache in var.anywhere_cache : startswith(cache.zone, var.region)
+    ])
+    error_message = "The zone for the Anywhere Cache must be within the bucket's region."
+  }
+
+  validation {
+    condition = alltrue([
+      for cache in var.anywhere_cache : contains(
+        ["admit-on-first-miss", "admit-on-second-miss"],
+        coalesce(cache.admission_policy, "admit-on-first-miss")
+      )
+    ])
+    error_message = "Allowed policies are 'admit-on-first-miss' or 'admit-on-second-miss'."
+  }
+}
+
+variable "enable_anywhere_cache" {
+  description = "If true, enables Anywhere Cache for the bucket."
+  type        = bool
+  default     = false
+}

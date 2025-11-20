@@ -93,6 +93,11 @@ deployment_groups:
       local_mount: /data
       random_suffix: true
       force_destroy: true
+      enable_anywhere_cache: true
+      anywhere_cache:
+      - zone: $(vars.zone)
+        ttl: "86400s"
+        admission_policy: "admit-on-first-miss"
 
   - id: data-bucket-pv
     source: modules/file-system/gke-persistent-volume

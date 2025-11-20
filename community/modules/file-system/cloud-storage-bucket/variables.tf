@@ -284,6 +284,22 @@ variable "anywhere_cache" {
     ])
     error_message = "Allowed policies are 'admit-on-first-miss' or 'admit-on-second-miss'."
   }
+
+  validation {
+    condition     = length(var.anywhere_cache[*].zone) == length(distinct(var.anywhere_cache[*].zone))
+    error_message = "Each Anywhere Cache configuration must specify a unique zone."
+  }
+
+  validation {
+    condition = alltrue([
+      for cache in var.anywhere_cache :
+      can(regex("^([0-9]+)s$", cache.ttl)) ? (
+        tonumber(regex("^([0-9]+)s$", cache.ttl)[0]) >= 86400 &&
+        tonumber(regex("^([0-9]+)s$", cache.ttl)[0]) <= 604800
+      ) : false
+    ])
+    error_message = "TTL must be between 1 day (86400s) and 7 days (604800s) and in the format 'Xs'."
+  }
 }
 
 variable "enable_anywhere_cache" {

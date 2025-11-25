@@ -252,3 +252,49 @@ variable "enable_object_retention" {
   type        = bool
   default     = false
 }
+
+variable "anywhere_cache" {
+  description = <<-EOT
+    Anywhere Cache configurations.
+    When you create a cache for a bucket, the cache must be created in a zone within the location of your bucket.
+    For example, if your bucket is located in the us-east1 region, you can create a cache in us-east1-b but not us-central1-c.
+    If your bucket is located in the ASIA dual-region, you can create a cache in any zones that make up the asia-east1 and asia-southeast1 regions.
+    This validation only works for single regions.
+    EOT
+  type = object({
+    zones            = list(string)
+    ttl              = optional(string, "86400s")
+    admission_policy = optional(string, "admit-on-first-miss")
+  })
+  default = null
+
+  validation {
+    condition = var.anywhere_cache == null || alltrue([
+      for zone in var.anywhere_cache.zones : startswith(zone, var.region)
+    ])
+    error_message = "The zone for the Anywhere Cache must be within the bucket's region."
+  }
+
+  validation {
+    condition = var.anywhere_cache == null || contains(
+      ["admit-on-first-miss", "admit-on-second-miss"],
+      var.anywhere_cache.admission_policy
+    )
+    error_message = "Allowed policies are 'admit-on-first-miss' or 'admit-on-second-miss'."
+  }
+
+  validation {
+    condition     = var.anywhere_cache == null || length(var.anywhere_cache.zones) == length(distinct(var.anywhere_cache.zones))
+    error_message = "Each Anywhere Cache configuration must specify a unique zone."
+  }
+
+  validation {
+    condition = var.anywhere_cache == null || (
+      can(regex("^([0-9]+)s$", var.anywhere_cache.ttl)) ? (
+        tonumber(regex("^([0-9]+)s$", var.anywhere_cache.ttl)[0]) >= 86400 &&
+        tonumber(regex("^([0-9]+)s$", var.anywhere_cache.ttl)[0]) <= 604800
+      ) : false
+    )
+    error_message = "TTL must be between 1 day (86400s) and 7 days (604800s) and in the format 'Xs'."
+  }
+}

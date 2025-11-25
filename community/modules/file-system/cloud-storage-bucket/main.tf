@@ -123,6 +123,29 @@ resource "google_storage_bucket" "bucket" {
       ])
       error_message = "The zone for the Anywhere Cache must be within the bucket's region."
     }
+
+    precondition {
+      condition = var.anywhere_cache == null || contains(
+        ["admit-on-first-miss", "admit-on-second-miss"],
+        var.anywhere_cache.admission_policy
+      )
+      error_message = "Allowed policies are 'admit-on-first-miss' or 'admit-on-second-miss'."
+    }
+
+    precondition {
+      condition     = var.anywhere_cache == null || length(var.anywhere_cache.zones) == length(distinct(var.anywhere_cache.zones))
+      error_message = "Each Anywhere Cache configuration must specify a unique zone."
+    }
+
+    precondition {
+      condition = var.anywhere_cache == null || (
+        can(regex("^([0-9]+)s$", var.anywhere_cache.ttl)) ? (
+          tonumber(regex("^([0-9]+)s$", var.anywhere_cache.ttl)[0]) >= 86400 &&
+          tonumber(regex("^([0-9]+)s$", var.anywhere_cache.ttl)[0]) <= 604800
+        ) : false
+      )
+      error_message = "TTL must be between 1 day (86400s) and 7 days (604800s) and in the format 'Xs'."
+    }
   }
 }
 

@@ -20,6 +20,11 @@
   register: outputs
   changed_when: false
 
+- name: Print terraform outputs
+  delegate_to: localhost
+  ansible.builtin.debug:
+    var: outputs.stdout
+
 - name: "Set facts for test"
   delegate_to: localhost
   ansible.builtin.set_fact:

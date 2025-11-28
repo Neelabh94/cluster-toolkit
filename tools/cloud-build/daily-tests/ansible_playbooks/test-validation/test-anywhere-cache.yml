@@ -28,9 +28,9 @@
 - name: "Set facts for test"
   delegate_to: localhost
   ansible.builtin.set_fact:
-    bucket_name: "{{ (outputs.stdout | from_json)['data-bucket_gcs_bucket_name']['value'] }}"
-    gke_cluster_name: "{{ (outputs.stdout | from_json)['gke_cluster_cluster_name']['value'] }}"
-    gke_cluster_location: "{{ (outputs.stdout | from_json)['gke_cluster_location']['value'] }}"
+    bucket_name: "{{ (outputs.stdout | from_json)['gcs_bucket_name_data-bucket']['value'] }}"
+    gke_cluster_name: "{{ (outputs.stdout | from_json)['cluster_name_gke_cluster']['value'] }}"
+    gke_cluster_location: "{{ (outputs.stdout | from_json)['location_gke_cluster']['value'] }}"
 
 - name: Read zone from blueprint
   delegate_to: localhost

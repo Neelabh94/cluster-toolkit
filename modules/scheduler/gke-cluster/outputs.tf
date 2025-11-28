@@ -102,3 +102,13 @@ output "gke_version" {
   description = "GKE cluster's version."
   value       = google_container_cluster.gke_cluster.master_version
 }
+
+output "cluster_name" {
+  description = "The name of the GKE cluster."
+  value       = google_container_cluster.gke_cluster.name
+}
+
+output "location" {
+  description = "The location (region or zone) of the GKE cluster."
+  value       = google_container_cluster.gke_cluster.location
+}

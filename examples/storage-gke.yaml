@@ -75,7 +75,7 @@ deployment_groups:
       master_authorized_networks:
       - display_name: deployment-machine
         cidr_block: $(vars.authorized_cidr)
-    outputs: [instructions, cluster_name, location]
+    outputs: [instructions, cluster_name, location, k8s_service_account_name]
 
   - id: debug_pool
     source: modules/compute/gke-node-pool

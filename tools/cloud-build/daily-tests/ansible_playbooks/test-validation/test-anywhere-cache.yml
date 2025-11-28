@@ -31,6 +31,7 @@
     bucket_name: "{{ (outputs.stdout | from_json)['gcs_bucket_name_data-bucket']['value'] }}"
     gke_cluster_name: "{{ (outputs.stdout | from_json)['cluster_name_gke_cluster']['value'] }}"
     gke_cluster_location: "{{ (outputs.stdout | from_json)['location_gke_cluster']['value'] }}"
+    k8s_service_account_name: "{{ (outputs.stdout | from_json)['k8s_service_account_name_gke_cluster']['value'] }}"
 
 - name: Read zone from blueprint
   delegate_to: localhost
@@ -61,7 +62,7 @@
 
 - name: "Read file from GCS bucket to trigger cache creation"
   delegate_to: localhost
-  ansible.builtin.command: "kubectl run gcs-reader-{{ build }} --image=google/cloud-sdk:slim --rm -i --restart=Never -- /bin/bash -c \"gcloud storage cat gs://{{ bucket_name }}/testfile.txt > /dev/null\""
+  ansible.builtin.command: "kubectl run gcs-reader-{{ build }} --image=google/cloud-sdk:slim --rm -i --restart=Never --serviceaccount={{ k8s_service_account_name }} -- /bin/bash -c \"gcloud storage cat gs://{{ bucket_name }}/testfile.txt > /dev/null\""
   changed_when: false
 
 - name: "Wait for cache to populate (10 seconds)"

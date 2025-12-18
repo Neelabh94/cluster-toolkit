@@ -14,41 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional, Iterable, Dict, Set, Any, Tuple
+from typing import List, Optional, Iterable, Dict, Set, Tuple
 from itertools import chain
 from collections import defaultdict
-from dataclasses import dataclass, field
 import logging
-import math
 import json
 from pathlib import Path
-import uuid
 import util
 from util import dirs, slurmdirs
-import tpu
 from addict import Dict as NSDict # type: ignore
-import yaml
-import conf_v2411
 
 FILE_PREAMBLE = """
 # Warning:
 # This file is managed by a script. Manual modifications will be overwritten.
 """
 log = logging.getLogger()
-
-
-def _slurm_version_gte(v1: str, v2: str) -> bool:
-    """Returns true if v1 >= v2, expects YY.MM format"""
-    try:
-        v1_parts = v1.split('.')
-        v2_parts = v2.split('.')
-        v1_major, v1_minor = int(v1_parts[0]), int(v1_parts[1])
-        v2_major, v2_minor = int(v2_parts[0]), int(v2_parts[1])
-        return (v1_major, v1_minor) >= (v2_major, v2_minor)
-    except (ValueError, IndexError):
-        log.error(f"Could not parse Slurm versions '{v1}' or '{v2}'. Assuming older version.")
-        return False
-
 
 def dict_to_conf(conf, delim=" ") -> str:
     """convert dict to delimited slurm-style key-value pairs"""
@@ -64,25 +44,16 @@ def dict_to_conf(conf, delim=" ") -> str:
     )
 
 
-TOPOLOGY_TREE = "topology/tree"
-TOPOLOGY_BLOCK = "topology/block"
-BLOCK_SIZE = 32 # closest power of two larger than BLOCK size ** 2 (**2 part is a requirement from slurm)
-NVLINK_VM_COUNT = 18 # Number of A4X VMs per block
+TOPOLOGY_PLUGIN_TREE = "topology/tree"
 
-
-def topology_type(lkp: util.Lookup, partition: NSDict) -> str:
+def topology_plugin(lkp: util.Lookup) -> str:
     """
-    Returns configured topology type for a given partition.
+    Returns configured topology plugin, defaults to `topology/tree`.
     """
-    if lkp.has_block_topology(partition):
-        if _slurm_version_gte(lkp.slurm_version, "25.05"):
-            log.info(f"Partition {partition.partition_name} is using block topology")
-            return TOPOLOGY_BLOCK
-        else:
-            log.info(f"Slurm version < 25.05, falling back to tree topology for Partition {partition.partition_name}")
-    else:
-        log.info(f"Partition {partition.partition_name} is using tree topology")
-    return TOPOLOGY_TREE
+    cp, key = lkp.cfg.cloud_parameters, "topology_plugin"
+    if key not in cp or cp[key] is None:
+        return TOPOLOGY_PLUGIN_TREE
+    return cp[key]
 
 def conflines(lkp: util.Lookup) -> str:
     params = lkp.cfg.cloud_parameters
@@ -105,17 +76,6 @@ def conflines(lkp: util.Lookup) -> str:
         for nodeset in lkp.cfg.nodeset.values()
     )
 
-    any_tpu = any(
-        tpu_nodeset is not None
-        for part in lkp.cfg.partitions.values()
-        for tpu_nodeset in part.partition_nodeset_tpu
-    )
-
-    any_gke = any(
-        lkp.nodeset_is_gke(nodeset)
-        for nodeset in lkp.cfg.nodeset.values()
-    )
-
     any_dynamic = any(bool(p.partition_feature) for p in lkp.cfg.partitions.values())
     comma_params = {
         "LaunchParameters": [
@@ -132,12 +92,13 @@ def conflines(lkp: util.Lookup) -> str:
         ],
     }
 
-    scripts_dir = lkp.cfg.install_dir or dirs.scripts
     prolog_path = Path(dirs.custom_scripts / "prolog.d")
     epilog_path = Path(dirs.custom_scripts / "epilog.d")
     task_prolog_path = Path(dirs.custom_scripts / "task_prolog.d")
     task_epilog_path = Path(dirs.custom_scripts / "task_epilog.d")
     default_tree_width = 65533 if any_dynamic else 128
+
+    scripts_dir = lkp.cfg.install_dir or dirs.scripts
 
     conf_options = {
         **(comma_params if not no_comma_params else {}),
@@ -160,12 +121,10 @@ def conflines(lkp: util.Lookup) -> str:
         "SuspendProgram": f"{scripts_dir}/suspend_wrapper.sh",
         "SuspendRate": get("suspend_rate", 0),
         "SuspendTimeout": get("suspend_timeout", 300),
-        "SlurmdTimeout": get("slurmd_timeout", 300),
-        "UnkillableStepTimeout": get("unkillable_step_timeout", 300),
         "TreeWidth": get("tree_width", default_tree_width),
-        "JobSubmitPlugins": "lua" if any_tpu else None,
-        "TopologyPlugin": TOPOLOGY_TREE if lkp.cfg.nodeset else None,
-        "TopologyParam": "SwitchAsNodeRank" if lkp.cfg.nodeset else None,
+        "JobSubmitPlugins": None,
+        "TopologyParam": get("topology_param", "SwitchAsNodeRank"),
+        "TopologyPlugin": topology_plugin(lkp) if lkp.cfg.nodeset else None,
     }
     return dict_to_conf(conf_options, delim="\n")
 
@@ -200,19 +159,6 @@ def nodeset_lines(nodeset, lkp: util.Lookup) -> str:
     )
 
 
-def nodeset_tpu_lines(nodeset, lkp: util.Lookup) -> str:
-    nodelist = lkp.nodelist(nodeset)
-    return "\n".join(
-        map(
-            dict_to_conf,
-            [
-                {"NodeName": nodelist, "State": "CLOUD", **nodeset.node_conf},
-                {"NodeSet": nodeset.nodeset_name, "Nodes": nodelist},
-            ],
-        )
-    )
-
-
 def nodeset_dyn_lines(nodeset):
     """generate slurm NodeSet definition for dynamic nodeset"""
     return dict_to_conf(
@@ -239,14 +185,12 @@ def partitionlines(partition, lkp: util.Lookup) -> str:
         chain(
             partition.partition_nodeset,
             partition.partition_nodeset_dyn,
-            partition.partition_nodeset_tpu,
         )
     )
 
-    is_tpu = len(partition.partition_nodeset_tpu) > 0
     is_dyn = len(partition.partition_nodeset_dyn) > 0
 
-    oversub_exlusive = partition.enable_job_exclusive or is_tpu
+    oversub_exlusive = partition.enable_job_exclusive
     power_down_on_idle = partition.enable_job_exclusive and not is_dyn
 
     line_elements = {
@@ -257,7 +201,6 @@ def partitionlines(partition, lkp: util.Lookup) -> str:
         "SuspendTime": 300,
         "Oversubscribe": "Exclusive" if oversub_exlusive else None,
         "PowerDownOnIdle": "YES" if power_down_on_idle else None,
-        "Topology": topology_type(lkp, partition) if lkp.cfg.nodeset else None,
         **partition.partition_conf,
     }
 
@@ -295,7 +238,6 @@ def make_cloud_conf(lkp: util.Lookup) -> str:
         conflines(lkp),
         *(nodeset_lines(n, lkp) for n in lkp.cfg.nodeset.values()),
         *(nodeset_dyn_lines(n) for n in lkp.cfg.nodeset_dyn.values()),
-        *(nodeset_tpu_lines(n, lkp) for n in lkp.cfg.nodeset_tpu.values()),
         *(partitionlines(p, lkp) for p in lkp.cfg.partitions.values()),
         *(suspend_exc_lines(lkp)),
     ]
@@ -350,25 +292,6 @@ def install_slurmdbd_conf(lkp: util.Lookup) -> None:
         "db_port": "3306",
         "auth_key": "slurm" if lkp.cfg.enable_slurm_auth else "munge",
     }
-
-    if lkp.cfg.cloudsql_secret:
-        secret_name = f"{lkp.cfg.slurm_cluster_name}-slurm-secret-cloudsql"
-        payload = json.loads(util.access_secret_version(lkp.project, secret_name))
-
-        if payload["db_name"] and payload["db_name"] != "":
-            conf_options["db_name"] = payload["db_name"]
-        if payload["user"] and payload["user"] != "":
-            conf_options["db_user"] = payload["user"]
-        if payload["password"] and payload["password"] != "":
-            conf_options["db_pass"] = payload["password"]
-
-        db_host_str = payload["server_ip"].split(":")
-        if db_host_str[0]:
-            conf_options["db_host"] = db_host_str[0]
-            conf_options["db_port"] = (
-                db_host_str[1] if len(db_host_str) >= 2 else "3306"
-            )
-
     conf = lkp.cfg.slurmdbd_conf_tpl.format(**conf_options)
 
     conf_file = lkp.etc_dir / "slurmdbd.conf"
@@ -383,54 +306,28 @@ def install_cgroup_conf(lkp: util.Lookup) -> None:
     util.chown_slurm(conf_file, mode=0o600)
 
 
-def install_jobsubmit_lua(lkp: util.Lookup) -> None:
-    """install job_submit.lua if there are tpu nodes in the cluster"""
-    if not any(
-        tpu_nodeset is not None
-        for part in lkp.cfg.partitions.values()
-        for tpu_nodeset in part.partition_nodeset_tpu
-    ):
-        return # No TPU partitions, no need for job_submit.lua
-
-    scripts_dir = lkp.cfg.slurm_scripts_dir or dirs.scripts
-    tpl = (scripts_dir / "job_submit.lua.tpl").read_text()
-    conf = tpl.format(scripts_dir=scripts_dir)
-
-    conf_file = lkp.etc_dir / "job_submit.lua"
-    conf_file.write_text(conf)
-    util.chown_slurm(conf_file, 0o600)
-
-
-def gen_cloud_gres_conf_lines(lkp: util.Lookup) -> str:
-    """generate cloud_gres.conf's content"""
+def gen_cloud_gres_conf(lkp: util.Lookup) -> None:
+    """generate cloud_gres.conf"""
 
     gpu_nodes = defaultdict(list)
     for nodeset in lkp.cfg.nodeset.values():
         ti = lkp.template_info(nodeset.instance_template)
         gpu_count = ti.gpu.count if ti.gpu  else 0
-        gpu_type = ti.gpu.type if ti.gpu  else None
         if gpu_count:
-            gpu_nodes[(gpu_count, gpu_type)].append(lkp.nodelist(nodeset))
+            gpu_nodes[gpu_count].append(lkp.nodelist(nodeset))
 
     lines = [
         dict_to_conf(
             {
                 "NodeName": names,
                 "Name": "gpu",
-                "Type": gpu_type,
-                "File": "/dev/nvidia{}".format(f"[0-{gpu_count-1}]" if gpu_count > 1 else "0"),
+                "File": "/dev/nvidia{}".format(f"[0-{i-1}]" if i > 1 else "0"),
             }
         )
-        for (gpu_count, gpu_type), names in gpu_nodes.items()
+        for i, names in gpu_nodes.items()
     ]
     lines.append("\n")
-    return "\n".join(lines)
-
-
-def gen_cloud_gres_conf(lkp: util.Lookup) -> None:
-    """create cloud_gres.conf file"""
-
-    content = FILE_PREAMBLE + gen_cloud_gres_conf_lines(lkp)
+    content = FILE_PREAMBLE + "\n".join(lines)
 
     conf_file = lkp.etc_dir / "cloud_gres.conf"
     conf_file.write_text(content)
@@ -461,32 +358,18 @@ class Switch:
         self.nodes = nodes or []
         self.switches = switches or {}
 
-    def render_yaml_switches(self):
-        this =  { "switch": self.name }
+    def conf_line(self) -> str:
+        d = {"SwitchName": self.name}
         if self.nodes:
-            this["nodes"] = util.to_hostlist(self.nodes)
-        else:
-            this["children"] = util.to_hostlist(self.switches.keys())
-        yield this
+            d["Nodes"] = util.to_hostlist(self.nodes)
+        if self.switches:
+            d["Switches"] = util.to_hostlist(self.switches.keys())
+        return dict_to_conf(d)
 
+    def render_conf_lines(self) -> Iterable[str]:
+        yield self.conf_line()
         for s in sorted(self.switches.values(), key=lambda s: s.name):
-            yield from s.render_yaml_switches()
-
-
-@dataclass
-class Block:
-    name: str
-    nodes: List[str] = field(default_factory=list)
-
-    def render_yaml_block(self) -> Optional[Dict]:
-        if not self.nodes:
-            return None
-        # uuid used in the unlikely event two unrelated NVLDs have the same hash
-        return {
-            "block": f"{self.name[:10]}-{uuid.uuid4().hex[:5]}",
-            "nodes": util.to_hostlist(self.nodes)
-        }
-
+            yield from s.render_conf_lines()
 
 class TopologySummary:
     """
@@ -497,11 +380,9 @@ class TopologySummary:
             self,
             physical_host: Optional[Dict[str, str]] = None,
             down_nodes: Optional[Iterable[str]] = None,
-            tpu_nodes: Optional[Iterable[str]] = None,
         ) -> None:
         self.physical_host = physical_host or {}
         self.down_nodes = set(down_nodes or [])
-        self.tpu_nodes = set(tpu_nodes or [])
 
 
     @classmethod
@@ -514,7 +395,6 @@ class TopologySummary:
         return cls(
             physical_host=d.get("physical_host"),
             down_nodes=d.get("down_nodes"),
-            tpu_nodes=d.get("tpu_nodes"),
         )
 
     @classmethod
@@ -529,7 +409,6 @@ class TopologySummary:
             {
                 "physical_host": self.physical_host,
                 "down_nodes": list(self.down_nodes),
-                "tpu_nodes": list(self.tpu_nodes),
             },
             indent=2)
 
@@ -537,7 +416,7 @@ class TopologySummary:
         TopologySummary.path(lkp).write_text(self.dumps())
 
     def _nodenames(self) -> Set[str]:
-        return set(self.physical_host) | self.down_nodes | self.tpu_nodes
+        return set(self.physical_host) | self.down_nodes
 
     def requires_reconfigure(self, prev: "TopologySummary") -> bool:
         """
@@ -554,66 +433,21 @@ class TopologySummary:
 
 class TopologyBuilder:
     def __init__(self) -> None:
-        self._r = Switch("")  # fake root for switches, not part of the tree
-        self._b: defaultdict[str, Dict[str, Block]] = defaultdict(dict)
+        self._r = Switch("")  # fake root, not part of the tree
         self.summary = TopologySummary()
 
     def add(self, path: List[str], nodes: Iterable[str]) -> None:
-        """
-        Process a list of paths and nodes and adds them to the topology builder.
-        This includes both tree and block topology.
-        """
         n = self._r
-        b = self._b
         assert path
         for p in path:
             n = n.switches.setdefault(p, Switch(p))
         n.nodes = [*n.nodes, *nodes]
 
-        try:
-            # Physical topology comes in slurm-root/BLOCK_GROUP/NVLD format for blocks.
-            block_group, nvld = path[1], path[2] # Skipping slurm-root
-            b[block_group].setdefault(nvld, Block(nvld)).nodes.extend(nodes)
-        except IndexError: # Fallback for nodes with no physical host.
-            b[_SLURM_TOPO_ROOT].setdefault(_SLURM_TOPO_ROOT, Block(_SLURM_TOPO_ROOT)).nodes.extend(nodes)
-
-    def render_blocks(self) -> list[Any]:
-        blocks = []
-        for block_group_name, nvld_blocks in self._b.items():
-            num_blocks = len(nvld_blocks.values())
-            for nvld in nvld_blocks.values():
-                blocks.append(nvld.render_yaml_block())
-            
-            if len(self._b) > 1:  # Only create phantom blocks for multi-block_group clusters
-                for phantom in range(num_blocks, BLOCK_SIZE):
-                    blocks.append({
-                        "block": f"{block_group_name[:10]}-p{phantom}",
-                        "nodes": ""
-                })
-        return blocks
-
-    def render_yaml(self, block_is_default: bool=False) -> List[Any]:
-        rendered_blocks = self.render_blocks()
-
-        sections = [
-            {
-                "topology": TOPOLOGY_TREE,
-                "cluster_default": not block_is_default,
-                "tree": {
-                    "switches": list(chain.from_iterable(s.render_yaml_switches() for s in self._r.switches.values())),
-                }
-            },
-        ]
-        if rendered_blocks:
-            sections.append({
-                "topology": TOPOLOGY_BLOCK,
-                "cluster_default": block_is_default,
-                "block": {
-                    "block_sizes": [NVLINK_VM_COUNT, NVLINK_VM_COUNT*BLOCK_SIZE],
-                    "blocks": rendered_blocks,
-                }
-            })
-        return sections
+    def render_conf_lines(self) -> Iterable[str]:
+        if not self._r.switches:
+            return [] # type: ignore
+        for s in sorted(self._r.switches.values(), key=lambda s: s.name):
+            yield from s.render_conf_lines()
 
     def compress(self) -> "TopologyBuilder":
         compressed = TopologyBuilder()
@@ -628,29 +462,7 @@ class TopologyBuilder:
                 _walk(us, cs)
 
         _walk(self._r, compressed._r)
-        compressed._b = self._b
         return compressed
-
-
-def add_tpu_nodeset_topology(nodeset: NSDict, bldr: TopologyBuilder, lkp: util.Lookup):
-    tpuobj = tpu.TPU.make(nodeset.nodeset_name, lkp)
-    static, dynamic = lkp.nodenames(nodeset)
-
-    pref = ["tpu-root",  f"ns_{nodeset.nodeset_name}"]
-    if tpuobj.vmcount == 1:  # Put all nodes in one switch
-        all_nodes = list(chain(static, dynamic))
-        bldr.add(pref, all_nodes)
-        bldr.summary.tpu_nodes.update(all_nodes)
-        return
-
-    # Chunk nodes into sub-switches of size `vmcount`
-    chunk_num = 0
-    for nodenames in (static, dynamic):
-        for nodeschunk in util.chunked(nodenames, n=tpuobj.vmcount):
-            chunk_name = f"{nodeset.nodeset_name}-{chunk_num}"
-            chunk_num += 1
-            bldr.add([*pref, chunk_name], nodeschunk)
-            bldr.summary.tpu_nodes.update(nodeschunk)
 
 _SLURM_TOPO_ROOT = "slurm-root"
 
@@ -668,21 +480,21 @@ def add_nodeset_topology(
     up_nodes = set()
     default_path = [_SLURM_TOPO_ROOT,  f"ns_{nodeset.nodeset_name}"]
 
-    for inst in lkp.instances().values():
+    for nodename, inst in lkp.instances().items():
         try:
-            if lkp.node_nodeset_name(inst.name) != nodeset.nodeset_name:
+            if lkp.node_nodeset_name(nodename) != nodeset.nodeset_name:
                 continue
         except Exception:
             continue
 
         phys_host = inst.resource_status.physical_host or ""
-        bldr.summary.physical_host[inst.name] = phys_host
-        up_nodes.add(inst.name)
+        bldr.summary.physical_host[nodename] = phys_host
+        up_nodes.add(nodename)
 
         if phys_host:
-            bldr.add(_make_physical_path(phys_host), [inst.name])
+            bldr.add(_make_physical_path(phys_host), [nodename])
         else:
-            bldr.add(default_path, [inst.name])
+            bldr.add(default_path, [nodename])
 
     down_nodes = []
     for node in chain(*lkp.nodenames(nodeset)):
@@ -694,67 +506,48 @@ def add_nodeset_topology(
 
 def gen_topology(lkp: util.Lookup) -> TopologyBuilder:
     bldr = TopologyBuilder()
-    for ns in lkp.cfg.nodeset_tpu.values():
-        add_tpu_nodeset_topology(ns, bldr, lkp)
     for ns in lkp.cfg.nodeset.values():
         add_nodeset_topology(ns, bldr, lkp)
     return bldr
 
-def gen_topology_yaml(lkp: util.Lookup) -> Tuple[bool, TopologySummary]:
+def gen_topology_conf(lkp: util.Lookup) -> Tuple[bool, TopologySummary]:
     """
-    Generates slurm topology.yaml.
-    Returns whether the topology.yaml got updated.
+    Generates slurm topology.conf.
+    Returns whether the topology.conf got updated.
     """
     topo = gen_topology(lkp).compress()
-    yaml_file = lkp.etc_dir / "cloud_topology.yaml"
-    block_is_default = any(lkp.has_block_topology(p) for p in lkp.cfg.partitions.values())
+    conf_file = lkp.etc_dir / "cloud_topology.conf"
 
-    with open(yaml_file, "w") as f:
-        f.write(FILE_PREAMBLE)
-        f.write("---\n\n")
-        yaml.dump(topo.render_yaml(block_is_default=block_is_default), f, sort_keys=False)
+    with open(conf_file, "w") as f:
+        f.writelines(FILE_PREAMBLE + "\n")
+        for line in topo.render_conf_lines():
+            f.write(line)
+            f.write("\n")
+        f.write("\n")
 
     prev_summary = TopologySummary.load(lkp)
     return topo.summary.requires_reconfigure(prev_summary), topo.summary
 
-def install_topology_yaml(lkp: util.Lookup) -> None:
-    yaml_file = lkp.etc_dir / "cloud_topology.yaml"
+def install_topology_conf(lkp: util.Lookup) -> None:
+    conf_file = lkp.etc_dir / "cloud_topology.conf"
     summary_file = lkp.etc_dir / "cloud_topology.summary.json"
-    topo_yaml = lkp.etc_dir / "topology.yaml"
+    topo_conf = lkp.etc_dir / "topology.conf"
 
-    if not topo_yaml.exists():
-        topo_yaml.symlink_to(yaml_file)
+    if not topo_conf.exists():
+        topo_conf.symlink_to(conf_file)
 
-    util.chown_slurm(yaml_file, mode=0o644)
+    util.chown_slurm(conf_file, mode=0o600)
     util.chown_slurm(summary_file, mode=0o600)
 
-
-def gen_controller_configs(lkp: util.Lookup) -> None:
-    slurm_version = lkp.slurm_version
-
-    # Versions >= 25.05 support the new YAML topology.
-    if _slurm_version_gte(slurm_version, "25.05"):
-        generate_configs_slurm_v2505(lkp)
-    else:
-        conf_v2411.generate_configs_slurm_v2411(lkp)
-
-def generate_configs_slurm_v2505(lkp: util.Lookup) -> None:
+def generate_configs_slurm_v2411(lkp: util.Lookup) -> None:
     install_slurm_conf(lkp)
     install_slurmdbd_conf(lkp)
     gen_cloud_conf(lkp)
     gen_cloud_gres_conf(lkp)
     install_gres_conf(lkp)
     install_cgroup_conf(lkp)
-    install_jobsubmit_lua(lkp)
+    # do not generate topology until nodesets are present
     if lkp.cfg.nodeset:
-        _, summary = generate_topology(lkp)
+        _, summary = gen_topology_conf(lkp)
         summary.dump(lkp)
-        install_topology_yaml(lkp)
-
-def generate_topology(lkp: util.Lookup) -> Tuple[bool, Any]:
-    slurm_version = lkp.slurm_version
-
-    if _slurm_version_gte(slurm_version, "25.05"):
-        return gen_topology_yaml(lkp)
-    else:
-        return conf_v2411.gen_topology_conf(lkp)
+        install_topology_conf(lkp)

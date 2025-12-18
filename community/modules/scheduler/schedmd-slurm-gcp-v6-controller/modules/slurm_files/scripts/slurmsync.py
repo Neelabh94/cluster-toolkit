@@ -411,9 +411,6 @@ def sync_instances():
 
 def reconfigure_slurm():
     update_msg = "*** slurm configuration was updated ***"
-    if lookup().cfg.hybrid:
-        # terraform handles generating the config.yaml, don't do it here
-        return
 
     upd, cfg_new = util.fetch_config()
     if not upd:
@@ -446,9 +443,7 @@ def reconfigure_slurm():
 
 
 def update_topology(lkp: util.Lookup) -> None:
-    if conf.topology_plugin(lkp) != conf.TOPOLOGY_PLUGIN_TREE:
-        return
-    updated, summary = conf.gen_topology_conf(lkp)
+    updated, summary = conf.generate_topology(lkp)
     if updated:
         log.info("Topology configuration updated. Reconfiguring Slurm.")
         util.scontrol_reconfigure(lkp)

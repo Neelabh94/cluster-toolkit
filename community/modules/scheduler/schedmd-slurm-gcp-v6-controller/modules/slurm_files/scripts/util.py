@@ -1946,6 +1946,13 @@ class Lookup:
             active_reservation=active_reservation
         )
 
+    def has_block_topology(self, partition: NSDict) -> bool:
+        return all(self.cfg.nodeset[ns].accelerator_topology == "1x72" and
+         self.cfg.nodeset[ns].reservation_name for ns in partition.partition_nodeset)
+
+    def has_gke_nodesets(self) -> bool:
+        return any(self.nodeset_is_gke(nodeset) for nodeset in self.cfg.nodeset.values())
+
     @lru_cache(maxsize=1)
     def machine_types(self):
         field_names = "name,zone,guestCpus,memoryMb,accelerators"
@@ -2090,6 +2097,24 @@ class Lookup:
             return None
 
         return self._parse_job_info(job_info=job_info)
+
+    @cached_property
+    def slurm_version(self) -> str:
+        """Get slurm version from slurmctld -V"""
+        try:
+            slurmctld_path = slurmdirs.prefix / "sbin" / "slurmctld"
+            result = run(f"{slurmctld_path} -V")
+            # The output is expected to be like "slurm 24.11.1"
+            match = re.search(r'(\d+\.\d+)', result.stdout)
+            if match:
+                version = match.group(1)
+                log.debug(f"Detected Slurm version: {version}")
+                return version
+        except Exception as e:
+            log.error(f"Failed to get slurm version via slurmctld: {e}")
+
+        log.warning("Failed to determine Slurm version, returning 'unknown'")
+        return "unknown"
 
     @property
     def etc_dir(self) -> Path:

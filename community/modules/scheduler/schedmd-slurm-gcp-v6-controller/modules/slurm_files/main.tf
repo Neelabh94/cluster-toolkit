@@ -183,6 +183,7 @@ locals {
     "tools/task-epilog",
     "tools/task-prolog",
     "conf.py",
+    "conf_v2411.py",
     "file_cache.py",
     "get_tpu_vmcount.py",
     "job_submit.lua.tpl",

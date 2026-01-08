@@ -12,23 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: PR Inactivity Reminder
+name: Inactive PR Processor
+
 on:
   schedule:
   - cron: "0 0 * * *" # Runs daily
 
 jobs:
-  stale-pr-check:
+  pr-inactivity-check:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-      contents: read
+      contents: read # Needed to checkout the repository
     steps:
-    - name: Mark Stale PRs
-      uses: actions/stale@v9
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-        days-before-pr-stale: 30
-        days-before-pr-close: -1 # Never close, just comment
-        stale-pr-label: "inactive"
-        stale-pr-message: "This PR has been inactive for 30 days. @author, please update it or close it if it is no longer needed. @hpc-toolkit, please review if there are pending actions."
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Run inactivity script
+      env:
+        # The GITHUB_TOKEN is required by the gh CLI
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: ./tools/github/inactive-pr-reminder.sh

@@ -20,8 +20,17 @@ set -euo pipefail
 #
 # Markers and thresholds
 REMINDER_MARKER="<!-- PR_INACTIVITY_REMINDER -->"
-DAYS_INTERVAL=30
-DAYS_TO_CLOSE=180
+# Original values for day-based monitoring
+# DAYS_INTERVAL=30
+# DAYS_TO_CLOSE=180
+
+# Testing values for hour-based monitoring
+# HOURS_INTERVAL=1
+# HOURS_TO_CLOSE=1
+
+# Testing values for minute-based monitoring
+MINUTES_INTERVAL=5
+MINUTES_TO_CLOSE=5
 
 echo "Fetching open pull requests..."
 # The `gh pr list` command can fail if no PRs are open.
@@ -46,18 +55,63 @@ for pr_number in $pr_numbers; do
 		continue
 	fi
 
+	# Check for approval status from the "multi-approvers" workflow
+	echo "Checking approval status for PR #${pr_number}..."
+	has_approvals=false
+	# The `gh pr checks` command can fail if checks are pending.
+	# We use `|| true` to prevent the script from exiting.
+	# The jq expression will filter for the specific check and conclusion.
+	checks_conclusion=$(gh pr checks "$pr_number" --jq '.[] | select(.name | contains("multi-approvers")) | .conclusion' || true)
+	if [[ "$checks_conclusion" == "SUCCESS" ]]; then
+		has_approvals=true
+		echo "PR #${pr_number} has sufficient approvals."
+	else
+		echo "PR #${pr_number} does not have sufficient approvals."
+	fi
+
+	# Check for unresolved comments
+	echo "Checking for unresolved comments on PR #${pr_number}..."
+	has_unresolved_comments=false
+	# This jq query will output 'true' if any review thread is not resolved.
+	if [[ $(gh pr view "$pr_number" --json reviewThreads | jq '[.reviewThreads[] | .isResolved] | any(. == false)') == "true" ]]; then
+		has_unresolved_comments=true
+		echo "PR #${pr_number} has unresolved comments."
+	else
+		echo "PR #${pr_number} has no unresolved comments."
+	fi
+
 	# Inactivity calculation
 	updated_at_seconds=$(date -d "$updated_at" +%s)
 	now_seconds=$(date +%s)
 	inactive_seconds=$((now_seconds - updated_at_seconds))
-	inactive_days=$((inactive_seconds / 86400))
 
-	echo "PR #${pr_number} has been inactive for ${inactive_days} days."
+	# Original inactivity calculation based on days
+	# inactive_days=$((inactive_seconds / 86400))
+	# inactive_unit="days"
+	# inactive_value=${inactive_days}
+	# interval=${DAYS_INTERVAL}
+	# close_threshold=${DAYS_TO_CLOSE}
 
-	# Closing logic
-	if ((inactive_days > DAYS_TO_CLOSE)); then
-		echo "PR #${pr_number} has been inactive for more than ${DAYS_TO_CLOSE} days. Closing."
-		gh pr comment "$pr_number" --body "This PR was automatically closed after being inactive for more than ${DAYS_TO_CLOSE} days. ${REMINDER_MARKER}"
+	# Testing inactivity calculation based on hours
+	# inactive_hours=$((inactive_seconds / 3600))
+	# inactive_unit="hours"
+	# inactive_value=${inactive_hours}
+	# interval=${HOURS_INTERVAL}
+	# close_threshold=${HOURS_TO_CLOSE}
+
+	# Testing inactivity calculation based on minutes
+	inactive_minutes=$((inactive_seconds / 60))
+	inactive_unit="minutes"
+	inactive_value=${inactive_minutes}
+	interval=${MINUTES_INTERVAL}
+	close_threshold=${MINUTES_TO_CLOSE}
+
+	echo "PR #${pr_number} has been inactive for ${inactive_value} ${inactive_unit}."
+
+	# Closing logic - only close if not approved
+	if ((inactive_value > close_threshold)) && [[ "$has_approvals" == "false" ]]; then
+		echo "PR #${pr_number} is unapproved and has been inactive for more than ${close_threshold} ${inactive_unit}. Closing."
+		gh pr comment "$pr_number" --body "This PR was automatically closed after being inactive for more than ${close_threshold} ${inactive_unit}. ${REMINDER_MARKER}"
 		gh pr close "$pr_number"
 		continue # Move to the next PR
 	fi
@@ -68,11 +122,19 @@ for pr_number in $pr_numbers; do
 	reminder_count=$(echo "$comments" | grep -c "$REMINDER_MARKER" || true)
 	echo "Found ${reminder_count} reminder(s) for PR #${pr_number}."
 
-	expected_reminders=$((inactive_days / DAYS_INTERVAL))
+	expected_reminders=$((inactive_value / interval))
 
 	if ((expected_reminders > reminder_count)); then
 		echo "Expected ${expected_reminders} reminder(s), found ${reminder_count}. Sending a new reminder."
-		gh pr comment "$pr_number" --body "This PR has been inactive for ${inactive_days} days. Please update it or close it if it is no longer needed. ${REMINDER_MARKER}"
+		if [[ "$has_approvals" == "true" ]]; then
+			gh pr comment "$pr_number" --body "This PR is approved and has been inactive for ${inactive_value} ${inactive_unit}. @author, please merge it. ${REMINDER_MARKER}"
+		else
+			if [[ "$has_unresolved_comments" == "true" ]]; then
+				gh pr comment "$pr_number" --body "This PR has been inactive for ${inactive_value} ${inactive_unit} and has unresolved comments. @author, please address the comments or close the PR if it's no longer needed. ${REMINDER_MARKER}"
+			else
+				gh pr comment "$pr_number" --body "This PR has been inactive for ${inactive_value} ${inactive_unit} and has no unresolved comments. @GoogleCloudPlatform/hpc-toolkit, please review. ${REMINDER_MARKER}"
+			fi
+		fi
 	else
 		echo "No new reminder needed for PR #${pr_number}."
 	fi

@@ -1321,6 +1321,9 @@ def to_hostnames(nodelist: str) -> List[str]:
     return hostnames
 
 
+def swallow_err(_: str) -> None:
+        pass
+
 def retry_exception(exc) -> bool:
     """return true for exceptions that should always be retried"""
     msg = str(exc)
@@ -1692,7 +1695,7 @@ class Lookup:
                 if  res.delete_at_time is not None and res.assured_count <= 0:
                     log.debug(f"DWS calendar reservation {res.bulk_insert_name} is not active yet, skipping resume.")
                     return True
-                
+
         return False    
 
     def node_is_dyn(self, node_name=None) -> bool:
@@ -1701,6 +1704,58 @@ class Lookup:
 
     def node_is_gke(self, node_name=None) -> bool:
         return self.nodeset_is_gke(self.node_nodeset(node_name))
+
+    def is_dws_flex_mig(self, mig_obj: Any) -> bool:
+        """
+        Checks if a given MIG object is for a slice AND was provisioned
+        for DWS Flex.
+        """
+        # Fix: Handle both Dictionary (API) and Dataclass (Internal)
+        if isinstance(mig_obj, dict):
+            versions = mig_obj.get('versions')
+            mig_name = mig_obj.get('name')
+        else:
+            versions = getattr(mig_obj, 'versions', None)
+            mig_name = getattr(mig_obj, 'name', None)
+
+        if not versions or not mig_name:
+            return False
+
+        try:
+            # Find the source nodeset by its name
+            found_nodeset = None
+            for ns_name, nodeset in self.cfg.nodeset.items():
+                mig_prefix = f"{self.cfg.slurm_cluster_name}-{ns_name}-"
+                if mig_name.startswith(mig_prefix):
+                    found_nodeset = nodeset
+                    break
+
+            if not found_nodeset:
+                return False
+
+            # Check if DWS Flex is enabled for the nodeset
+            if not found_nodeset.dws_flex.enabled:
+                return False
+
+            # Check accelerator topology from nodeset
+            if found_nodeset.accelerator_topology != "1x64":
+                return False
+
+            # Verify it's an A4 MIG by checking the instance template's GPU count.
+            template_url = versions[0] if isinstance(versions[0], str) else versions[0].get('instanceTemplate')
+            if not template_url:
+                return False
+
+            template_details = self.template_info(template_url)
+            gpu = get_template_gpu(template_details)
+
+            if not gpu or gpu.count != 4:
+                return False
+
+            return True
+        except Exception as e:
+            log.error(f"Could not determine DWS Flex status for MIG '{mig_name}': {e}")
+            return False
 
     def nodeset_is_gke(self, nodeset=None) -> bool:
         if hasattr(nodeset, 'get'):
@@ -1713,6 +1768,10 @@ class Lookup:
 
     def node_template_info(self, node_name=None):
         return self.template_info(self.node_template(node_name))
+
+    def node_accelerator_topology(self, node_name=None):
+        return self.node_nodeset(node_name).accelerator_topology
+
 
     def node_region(self, node_name=None):
         nodeset = self.node_nodeset(node_name)
@@ -2265,4 +2324,27 @@ def slurm_version_gte(v1: str, v2: str) -> bool:
         return (v1_major, v1_minor) >= (v2_major, v2_minor)
     except (ValueError, IndexError):
         log.error(f"Could not parse Slurm versions '{v1}' or '{v2}'. Assuming older version.")
+        return False
+
+def is_slice_flex_node(node: str) -> bool:
+    """
+    Checks if a node is an A4X node configured for DWS Flex.
+    This is determined by checking the nodeset's configuration for DWS Flex,
+    the accelerator topology, and the GPU count of the machine type.
+    """
+    try:
+        lkp = lookup()
+        nodeset = lkp.node_nodeset(node)
+
+        # Check for DWS Flex and specific accelerator topology
+        if not (nodeset.dws_flex.enabled and nodeset.accelerator_topology == "1x64"):
+            return False
+
+        # Verify GPU count from the instance template
+        template_info = lkp.node_template_info(node)
+        gpu = get_template_gpu(template_info)
+
+        return gpu is not None and gpu.count == 4
+    except Exception as e:
+        log.debug(f"Could not determine if node '{node}' is an A4X node: {e}")
         return False

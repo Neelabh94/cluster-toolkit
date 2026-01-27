@@ -18,12 +18,16 @@ package shell
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"hpc-toolkit/pkg/config"
 	"hpc-toolkit/pkg/logging"
+	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -33,6 +37,51 @@ import (
 type ProposedChanges struct {
 	Summary string
 	Full    string
+}
+
+// CommandResult holds the output and exit code of an executed command.
+type CommandResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// ExecuteCommand executes a shell command and returns its output and exit code.
+func ExecuteCommand(command string) CommandResult {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			return CommandResult{
+				Stdout:   stdout.String(),
+				Stderr:   stderr.String(),
+				ExitCode: exitError.ExitCode(),
+			}
+		}
+		// If it's not an ExitError, it's some other error during command execution
+		return CommandResult{
+			Stdout:   stdout.String(),
+			Stderr:   stderr.String(),
+			ExitCode: 1, // Generic error code
+		}
+	}
+	return CommandResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: 0,
+	}
+}
+
+// RandomString generates a random string of a given length.
+func RandomString(length int) string {
+	rand.Seed(time.Now().UnixNano())
+	b := make([]byte, length)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)[:length]
 }
 
 // ValidateDeploymentDirectory ensures that the deployment directory structure

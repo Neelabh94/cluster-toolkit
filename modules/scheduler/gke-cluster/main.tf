@@ -321,7 +321,7 @@ resource "google_container_node_pool" "system_node_pools" {
 
   management {
     auto_repair  = true
-    auto_upgrade = true
+    auto_upgrade = false
   }
 
   node_config {

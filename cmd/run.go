@@ -30,6 +30,8 @@ var (
 	outputManifest  string
 	clusterName     string
 	clusterLocation string
+	projectID       string
+	useCraneBuilder bool
 )
 
 func init() {
@@ -43,6 +45,8 @@ func init() {
 	runCmd.Flags().StringVarP(&outputManifest, "output-manifest", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
 	runCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster to deploy the workload to. Required.")
 	runCmd.Flags().StringVar(&clusterLocation, "cluster-location", "", "Location (zone or region) of the GKE cluster. Required.")
+	runCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
+	runCmd.Flags().BoolVar(&useCraneBuilder, "use-crane-builder", false, "Use crane-based image builder instead of Cloud Build (Python implementation).")
 
 	// Mark required flags
 	runCmd.MarkFlagRequired("image-name")
@@ -71,10 +75,9 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 		CommandToRun:    commandToRun,
 		AcceleratorType: acceleratorType,
 		OutputManifest:  outputManifest,
-		ProjectID:       "", // Will be populated by ExecuteRun if empty
-		ClusterName:     clusterName,
 		ClusterLocation: clusterLocation,
-	}
+		ProjectID:       projectID,
+		UseCraneBuilder: useCraneBuilder}
 
 	if err := run.ExecuteRun(runOpts); err != nil {
 		logging.Fatal("gcluster run failed: %v", err)

@@ -85,10 +85,8 @@ func SubmitCloudBuild(cloudBuildYamlContent string, buildContextPath string, pro
 	logging.Info("Submitting Cloud Build with context: %s", buildContextPath)
 	logging.Info("CloudBuild YAML content:\n%s", cloudBuildYamlContent)
 
-	cmd := fmt.Sprintf("gcloud builds submit %s --config=%s --project=%s", buildContextPath, tmpFile.Name(), projectID)
-
 	// Execute the gcloud command
-	result := shell.ExecuteCommand(cmd)
+	result := shell.ExecuteCommand("gcloud", "builds", "submit", buildContextPath, "--config", tmpFile.Name(), "--project", projectID)
 
 	if result.ExitCode != 0 {
 		return "", fmt.Errorf("gcloud builds submit failed with exit code %d: %s\n%s", result.ExitCode, result.Stderr, result.Stdout)

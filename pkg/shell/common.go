@@ -47,9 +47,12 @@ type CommandResult struct {
 }
 
 // ExecuteCommand executes a shell command and returns its output and exit code.
-func ExecuteCommand(command string) CommandResult {
+// It takes the command name as the first argument, followed by its arguments.
+func ExecuteCommand(name string, args ...string) CommandResult {
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("bash", "-c", command)
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 

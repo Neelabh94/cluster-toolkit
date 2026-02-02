@@ -20,6 +20,7 @@ import (
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/shell"
 	"os"
+	"strings"
 	"text/template"
 )
 
@@ -168,8 +169,9 @@ func ApplyGKEManifest(manifestContent string, projectID, clusterName, clusterLoc
 	// In a real scenario, this might involve 'gcloud container clusters get-credentials'
 	// For now, assume kubectl context is already set up correctly by the user.
 
-	cmd := fmt.Sprintf("kubectl apply -f %s", tmpFile.Name())
-	result := shell.ExecuteCommand(cmd)
+	cmdArgs := []string{"kubectl", "apply", "-f", tmpFile.Name()}
+	logging.Info("Executing: %s", strings.Join(cmdArgs, " "))
+	result := shell.ExecuteCommand(cmdArgs[0], cmdArgs[1:]...)
 
 	if result.ExitCode != 0 {
 		return fmt.Errorf("kubectl apply failed with exit code %d: %s\n%s", result.ExitCode, result.Stderr, result.Stdout)

@@ -352,23 +352,7 @@ def create_client_options(api: ApiEndpoint) -> ClientOptions:
 log = logging.getLogger()
 
 
-def access_secret_version(project_id, secret_id, version_id="latest"):
-    """
-    Access the payload for the given secret version if one exists. The version
-    can be a version number as a string (e.g. "5") or an alias (e.g. "latest").
-    """
-    co = create_client_options(ApiEndpoint.SECRET)
-    client = secretmanager.SecretManagerServiceClient(client_options=co)
-    name = f"projects/{project_id}/secrets/{secret_id}/versions/{version_id}"
-    try:
-        response = client.access_secret_version(request={"name": name})
-        log.debug(f"Secret '{name}' was found.")
-        payload = response.payload.data.decode("UTF-8")
-    except gExceptions.NotFound:
-        log.debug(f"Secret '{name}' was not found!")
-        payload = None
 
-    return payload
 
 
 def parse_self_link(self_link: str):
@@ -582,6 +566,16 @@ def install_custom_scripts(check_hash:bool=False):
             with fullpath.open("wb") as f:
                 source.download_to_file(f)
             chown_slurm(fullpath, mode=0o755)
+
+def access_secret_version(project_id: str, secret_id: str) -> str:
+    """
+    Access the payload for the given secret version if one exists. The version
+    can be a version number as a string (e.g. "5") or an alias (e.g. "latest").
+    """
+    client = secretmanager.SecretManagerServiceClient(client_options=create_client_options(ApiEndpoint.SECRET))
+    name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode("UTF-8")
 
 def compute_service(version="beta"):
     """Make thread-safe compute service handle

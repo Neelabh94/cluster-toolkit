@@ -46,37 +46,59 @@ type CommandResult struct {
 	ExitCode int
 }
 
-// ExecuteCommand executes a shell command and returns its output and exit code.
-// It takes the command name as the first argument, followed by its arguments.
-func ExecuteCommand(name string, args ...string) CommandResult {
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+// Command represents a shell command that can be executed.
+type Command struct {
+	cmd    *exec.Cmd
+	stdin  bytes.Buffer
+	stdout bytes.Buffer
+	stderr bytes.Buffer
+}
 
-	err := cmd.Run()
+// NewCommand creates a new Command instance.
+func NewCommand(name string, args ...string) *Command {
+	cmd := exec.Command(name, args...)
+	return &Command{cmd: cmd}
+}
+
+// SetInput sets the standard input for the command.
+func (c *Command) SetInput(input string) {
+	c.stdin.WriteString(input)
+	c.cmd.Stdin = &c.stdin
+}
+
+// Execute runs the command and returns a CommandResult.
+func (c *Command) Execute() CommandResult {
+	c.cmd.Stdout = &c.stdout
+	c.cmd.Stderr = &c.stderr
+
+	err := c.cmd.Run()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			return CommandResult{
-				Stdout:   stdout.String(),
-				Stderr:   stderr.String(),
+				Stdout:   c.stdout.String(),
+				Stderr:   c.stderr.String(),
 				ExitCode: exitError.ExitCode(),
 			}
 		}
 		// If it's not an ExitError, it's some other error during command execution
 		return CommandResult{
-			Stdout:   stdout.String(),
-			Stderr:   stderr.String(),
+			Stdout:   c.stdout.String(),
+			Stderr:   c.stderr.String(),
 			ExitCode: 1, // Generic error code
 		}
 	}
 	return CommandResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
+		Stdout:   c.stdout.String(),
+		Stderr:   c.stderr.String(),
 		ExitCode: 0,
 	}
+}
+
+// ExecuteCommand executes a shell command and returns its output and exit code.
+// It takes the command name as the first argument, followed by its arguments.
+func ExecuteCommand(name string, args ...string) CommandResult {
+	cmd := NewCommand(name, args...)
+	return cmd.Execute()
 }
 
 // RandomString generates a random string of a given length.

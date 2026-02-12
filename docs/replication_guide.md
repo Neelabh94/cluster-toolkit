@@ -1,17 +1,37 @@
-# Replication Guide: `gcluster run` Proof-of-Concept
+# Replication Guide: `gcluster run` Sample Workload
 
-This guide provides a step-by-step process to replicate the `gcluster run` Proof-of-Concept (POC), which demonstrates building a Docker image using Google Cloud Build and deploying it as a Kubernetes Job to a GKE cluster using the `cluster-toolkit`.
+This guide provides a step-by-step process to deploy a GKE cluster, submit a sample Python script as a workload using `gcluster run` with on-the-fly image building via Crane, and then destroy the cluster.
 
 ## 1. Prerequisites
 
 Before you begin, ensure you have the following installed and configured:
 
-*   **Go (1.20 or later):** Required for building the `gcluster` binary.
-*   **Google Cloud SDK:** Includes `gcloud` and `kubectl`.
-    *   Ensure `gcloud` is authenticated and configured with a default project (`gcloud auth login` and `gcloud config set project <YOUR_GCP_PROJECT_ID>`).
-    *   Ensure `kubectl` is installed (`gcloud components install kubectl`).
-*   **A GCP Project:** You will need a GCP project with billing enabled and necessary APIs enabled (e.g., Kubernetes Engine API, Cloud Build API, Artifact Registry API).
-*   **`make`:** (Usually pre-installed on Linux/macOS, or install via package manager).
+* **Go (1.20 or later):** Required for building the `gcluster` binary.
+* **Google Cloud SDK:** Includes `gcloud` and `kubectl`.
+  * Ensure `gcloud` is authenticated and configured with a default project (`gcloud auth login` and `gcloud config set project <YOUR_GCP_PROJECT_ID>`).
+  * Ensure `kubectl` is installed (`gcloud components install kubectl`).
+  * **Docker Credential Helper:** Configure Docker to authenticate to Google Container Registry and Artifact Registry. This allows `gcluster` to push/pull images.
+
+    ```bash
+    gcloud auth configure-docker gcr.io
+    gcloud auth configure-docker us-central1-docker.pkg.dev # Or your Artifact Registry host
+    ```
+
+  * **Application Default Credentials (ADC):** Authenticate your local environment for Google Cloud client libraries and tools. This is an interactive step, requiring browser interaction.
+
+    ```bash
+    gcloud auth application-default login
+    ```
+
+  * **Enable Artifact Registry API:** Ensure the Artifact Registry API is enabled in your project.
+
+    ```bash
+    gcloud services enable artifactregistry.googleapis.com --project <YOUR_GCP_PROJECT_ID>
+    ```
+
+* **A GCP Project:** You will need a GCP project with billing enabled and necessary APIs enabled (e.g., Kubernetes Engine API, Artifact Registry API, Cloud Resource Manager API).
+* **Docker:** Required for building images locally if needed for debugging, but `gcluster run` uses Crane internally.
+* **`make`:** (Usually pre-installed on Linux/macOS, or install via package manager).
 
 ## 2. Clone the Repository
 
@@ -22,176 +42,170 @@ git clone https://github.com/GoogleCloudPlatform/hpc-toolkit cluster-toolkit
 cd cluster-toolkit
 ```
 
-## 3. Apply Code Changes
-
-This POC involves creating several new files and modifying a few existing ones. For each file, click the provided link to view its content and ensure you create/modify it exactly as shown.
-
-### 3.1. Create New Files
-
-#### `cluster-toolkit/cmd/run.go`
-This file defines the `gcluster run` command and its CLI flags.
-
-*   **Location:** `cluster-toolkit/cmd/run.go`
-*   **Content:** [Link to cluster-toolkit/cmd/run.go content on Google Docs]
-
-#### `cluster-toolkit/pkg/run/run.go`
-This file orchestrates the entire `gcluster run` workflow.
-
-*   **Location:** `cluster-toolkit/pkg/run/run.go`
-*   **Content:** [Link to cluster-toolkit/pkg/run/run.go content on Google Docs]
-
-#### `cluster-toolkit/pkg/run/cloudbuild/cloudbuild.go`
-This file handles Cloud Build YAML generation and submission.
-
-*   **Location:** `cluster-toolkit/pkg/run/cloudbuild/cloudbuild.go`
-*   **Content:** [Link to cluster-toolkit/pkg/run/cloudbuild/cloudbuild.go content on Google Docs]
-
-#### `cluster-toolkit/pkg/run/gkemanifest/gkemanifest.go`
-This file manages Kubernetes Job manifest generation and application.
-
-*   **Location:** `cluster-toolkit/pkg/run/gkemanifest/gkemanifest.go`
-*   **Content:** [Link to cluster-toolkit/pkg/run/gkemanifest/gkemanifest.go content on Google Docs]
-
-#### `cluster-toolkit/docs/design/gcluster_run_design_doc.md`
-The design document for `gcluster run` (already created).
-
-*   **Location:** `cluster-toolkit/docs/design/gcluster_run_design_doc.md`
-*   **Content:** [Link to cluster-toolkit/docs/design/gcluster_run_design_doc.md content on Google Docs]
-
-#### `cluster-toolkit/docs/technical_details_gcluster_run.md`
-The detailed technical document for `gcluster run` (already created).
-
-*   **Location:** `cluster-toolkit/docs/technical_details_gcluster_run.md`
-*   **Content:** [Link to cluster-toolkit/docs/technical_details_gcluster_run.md content on Google Docs]
-
-### 3.2. Modify Existing Files
-
-#### `cluster-toolkit/pkg/shell/common.go`
-Modified to include generic shell command execution and random string generation.
-
-*   **Location:** `cluster-toolkit/pkg/shell/common.go`
-*   **Content:** [Link to cluster-toolkit/pkg/shell/common.go content on Google Docs]
-
-#### `cluster-toolkit/go.mod`
-(No direct modification by the agent, but ensures the module path is `hpc-toolkit`)
-Confirm that your `go.mod` file contains `module hpc-toolkit` at the top.
-
-*   **Location:** `cluster-toolkit/go.mod`
-*   **Content:** [Link to cluster-toolkit/go.mod content on Google Docs]
-
-## 4. Build the `gcluster` Binary
+## 3. Build the `gcluster` Binary
 
 Navigate to the `cluster-toolkit` directory (if not already there) and build the `gcluster` binary:
 
 ```bash
-cd cluster-toolkit
-make
+go build -o gcluster .
 ```
 
-This command compiles the Go source code, including your new `gcluster run` command, and creates an executable named `gcluster` in the current directory.
+This command compiles the Go source code, including the `gcluster run` command, and creates an executable named `gcluster` in the current directory.
 
-## 5. Prepare Application Code
+## 4. Prepare Sample Application Code
 
-Create the following placeholder files in your `cluster-toolkit` directory. These will be used to build your Docker image.
+Create a directory named `job_details` and place the following files inside it. This will serve as your build context for the workload.
 
-#### `cluster-toolkit/Dockerfile`
+### `cluster-toolkit/job_details/Dockerfile`
 
-*   **Location:** `cluster-toolkit/Dockerfile`
-*   **Content:** [Link to cluster-toolkit/Dockerfile content on Google Docs]
+```dockerfile
+FROM python:3.9-slim
 
-#### `cluster-toolkit/requirements.txt`
+WORKDIR /app
 
-*   **Location:** `cluster-toolkit/requirements.txt`
-*   **Content:** [Link to cluster-toolkit/requirements.txt content on Google Docs]
+COPY requirements.txt .
 
-#### `cluster-toolkit/app.py`
+RUN pip install --no-cache-dir -r requirements.txt
 
-*   **Location:** `cluster-toolkit/app.py`
-*   **Content:** [Link to cluster-toolkit/app.py content on Google Docs]
+COPY app.py .
 
-## 6. Deploy a GKE Cluster
+CMD ["python", "app.py"]
+```
 
-For this POC, we'll deploy a basic GKE cluster using an example blueprint. This will create a CPU-only cluster, which we will target with our job.
+### `cluster-toolkit/job_details/requirements.txt`
 
-*   **Ensure `gcloud` is configured with your project ID and a region/zone where GKE is available.**
+(This file can be empty for this simple example, or list any Python dependencies.)
+
+```text
+# No specific requirements for this example
+```
+
+### `cluster-toolkit/job_details/app.py`
+
+```python
+# app.py
+print("Hello from the gcluster run application!")
+print("This is a sample application running on GKE.")
+```
+
+## 5. Deploy a GKE Cluster
+
+For this example, we'll deploy a basic GKE cluster using the `hpc-gke.yaml` blueprint.
+
+* **Ensure `gcloud` is configured with your project ID and a region/zone where GKE is available.**
+
     ```bash
-    gcloud config set project <YOUR_GCP_PROJECT_ID>
-    gcloud config set compute/region us-central1 # Or your preferred region
-    ```
+        gcloud config set project <YOUR_GCP_PROJECT_ID>
+        gcloud config set compute/region us-central1 # Or your preferred region
+        ```
 
-*   **Create the deployment directory:**
+    * **Create the deployment directory:**
 
     ```bash
-    ./gcluster create examples/hpc-gke.yaml --vars="project_id=<YOUR_GCP_PROJECT_ID>,deployment_name=cluster-01,region=us-central1,gcp_public_cidrs_access_enabled=false,authorized_cidr=0.0.0.0/0"
+    ./gcluster create examples/hpc-gke.yaml --vars="project_id=<YOUR_GCP_PROJECT_ID>,deployment_name=my-test-cluster,region=us-central1,gcp_public_cidrs_access_enabled=false,authorized_cidr=$(curl -s ifconfig.me)/32"
     ```
 
     *Replace `<YOUR_GCP_PROJECT_ID>` with your actual GCP Project ID.*
 
-*   **Deploy the GKE cluster:**
+* **Deploy the GKE cluster:**
 
     ```bash
-    ./gcluster deploy cluster-01
+    ./gcluster deploy my-test-cluster
     ```
+
     *This command will show a Terraform plan. You will be prompted to confirm the changes (type `a` and press Enter).*
 
     *This deployment process can take a significant amount of time (e.g., 10-20 minutes or more) as it provisions cloud resources.* Wait for the command to complete successfully.
 
-## 7. Submit the Job with `gcluster run`
+## 6. `gcluster run` Command Reference
 
-Now that the cluster is deployed, you can submit your sample job using the `gcluster run` command. Note that we are *not* specifying an `--accelerator-type` here to ensure it schedules on the default CPU nodes.
+The `gcluster run` command deploys a Docker image as a workload (Kubernetes JobSet) on a GKE cluster, integrated with Kueue. It can use pre-built images or build images on-the-fly using Crane.
 
-```bash
-./gcluster run \
-  --image-name=<YOUR_GCP_PROJECT_ID>/my-test-app:latest \
-  --dockerfile=./Dockerfile \
-  --build-context=.
-  --command="python app.py" \
-  --cluster-name=cluster-01 \
-  --cluster-location=us-central1
-```
+### Supported Flags
 
-*Replace `<YOUR_GCP_PROJECT_ID>` with your actual GCP Project ID.*
+Here are the flags currently supported by `gcluster run`:
 
-## 8. Verify the Job
+* `-i, --docker-image string`: Name of a pre-built Docker image to run (e.g., `my-project/my-image:tag`). Use this if your image is already pushed to a registry.
+* `--base-docker-image string`: Name of the base Docker image for Crane to build upon (e.g., `python:3.9-slim`). Required when using `--build-context` for an on-the-fly build.
+* `-c, --build-context string`: Path to the build context directory for Crane (e.g., `./job_details`). Required with `--base-docker-image`. Crane will automatically look for a `Dockerfile` within this directory.
+* `-e, --command string`: Command to execute in the container (e.g., `'python app.py'`). This overrides the `CMD` instruction in your `Dockerfile`. (Required)
+* `-a, --accelerator-type string`: Type of accelerator to request (e.g., `'nvidia-tesla-a100'`, `'tpu-v4-podslice'`). Specify this if your workload requires GPUs or TPUs.
+* `-o, --output-manifest string`: Path to output the generated Kubernetes manifest instead of applying it directly to the cluster. Useful for inspection.
+* `--cluster-name string`: Name of the GKE cluster to deploy the workload to. (Required)
+* `--cluster-location string`: Location (region) of the GKE cluster. (Required)
+* `-p, --project string`: Google Cloud Project ID. If not provided, it will be inferred from your `gcloud` configuration.
+* `-f, --platform string`: Target platform for the Docker image build (e.g., `'linux/amd64'`, `'linux/arm64'`). Used with `--base-docker-image`. (Default: `linux/amd64`)
+* `-w, --workload-name string`: Name of the workload (JobSet) to create. This name will be used for Kubernetes resources. (Required)
+* `--kueue-queue string`: Name of the Kueue LocalQueue to submit the workload to. (Default: `default-queue`)
+* `--num-slices int`: Number of JobSet replicas (slices). (Default: `1`)
+* `--vms-per-slice int`: Number of VMs (pods) per slice. (Default: `1`)
+* `--max-restarts int`: Maximum number of restarts for the JobSet before failing. (Default: `1`)
+* `--ttl-seconds-after-finished int`: Time (in seconds) to retain the JobSet after it finishes. (Default: `3600` seconds / 1 hour)
 
-Verify that the image was built by Cloud Build and that the Kubernetes Job ran successfully on your GKE cluster.
+## 7. Submit the Sample Workload with `gcluster run`
 
-*   **Check Cloud Build Status:**
+Now that the cluster is deployed and your application code is prepared, you can submit your sample Python script as a JobSet workload. `gcluster run` will automatically build your Docker image using Crane and push it to Artifact Registry (or Container Registry) in your project.
+
+* **Submit the workload:**
 
     ```bash
-    gcloud builds list --project <YOUR_GCP_PROJECT_ID>
+    ./gcluster run \
+      --project <YOUR_GCP_PROJECT_ID> \
+      --cluster-name my-test-cluster \
+      --cluster-location us-central1 \
+      --base-docker-image python:3.9-slim \
+      --build-context job_details \
+      --command "python app.py" \
+      --workload-name my-python-app-job
     ```
-    Look for a build with `STATUS: SUCCESS` and `IMAGES` pointing to `gcr.io/<YOUR_GCP_PROJECT_ID>/my-test-app`.
 
-*   **Check Kubernetes Job Status:**
+    *Replace `<YOUR_GCP_PROJECT_ID>` with your actual GCP Project ID.*
+
+    This command will:
+    1. Verify/install the JobSet CRD on your cluster.
+    2. Build a Docker image from `job_details/Dockerfile` using `python:3.9-slim` as the base, and push it to Artifact Registry.
+    3. Generate and apply a Kubernetes JobSet manifest to your `my-test-cluster`.
+
+## 8. Verify the Workload
+
+Verify that the Kubernetes JobSet ran successfully on your GKE cluster.
+
+* **Check JobSet Status:**
 
     ```bash
-    kubectl get jobs --namespace default
+    kubectl get jobset --namespace default
     ```
-    Look for a job named similar to `gcluster-workload-XXXXXXXX` with `COMPLETIONS: 1/1` and `STATUS: Completed`.
 
-*   **Get Pod Logs:**
-    First, get the exact pod name for your completed job:
+    Look for a JobSet named `my-python-app-job` with a `SUCCEEDED` status in the `CONDITIONS` section.
+
+* **Get Pod Logs:**
+    First, get the name of the Pod created by your JobSet:
+
     ```bash
-    kubectl get pods --namespace default --selector=gcluster.google.com/workload=<JOB_NAME>
+    kubectl get pods --namespace default -l jobset.sigs.k8s.io/jobset-name=my-python-app-job
     ```
-    (Replace `<JOB_NAME>` with the name of your completed job from `kubectl get jobs` output, e.g., `gcluster-workload-5f1619aa`).
+
+    Note the Pod name (e.g., `my-python-app-job-worker-0-xxxxxx`).
 
     Then, get the logs from the pod:
+
     ```bash
     kubectl logs <POD_NAME> --namespace default
     ```
+
     You should see the output:
-    ```
+
+    ```text
     Hello from the gcluster run application!
-    This is a placeholder application.
+    This is a sample application running on GKE.
     ```
 
-## 9. Cleanup (Optional)
+## 9. Cleanup
 
-To avoid incurring unnecessary costs, you can destroy the deployed GKE cluster:
+To avoid incurring unnecessary costs, destroy the deployed GKE cluster and its resources:
 
 ```bash
-./gcluster destroy cluster-01
+./gcluster destroy my-test-cluster
 ```
+
 *You will be prompted to confirm the destruction (type `a` and press Enter).*

@@ -15,30 +15,18 @@
 package gke
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"fmt"
+	"hpc-toolkit/pkg/imagebuilder" // New import for the image builder
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/shell"
 	"io"
-	"io/fs"
-	"math/rand"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
-	"time"
 
-	"github.com/google/go-containerregistry/pkg/compression"
-	"github.com/google/go-containerregistry/pkg/crane"
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
 
@@ -109,14 +97,6 @@ type ManifestOptions struct {
 	MaxRestarts             int
 	TtlSecondsAfterFinished int
 }
-
-// DockerPlatform represents the target platform for a Docker image.
-type DockerPlatform string
-
-const (
-	LinuxAMD64 DockerPlatform = "linux/amd64"
-	LinuxARM64 DockerPlatform = "linux/arm64"
-)
 
 // GKEOrchestrator implements the Orchestrator interface for GKE.
 type GKEOrchestrator struct {
@@ -214,13 +194,13 @@ func (g *GKEOrchestrator) buildDockerImage(project, baseDockerImage, buildContex
 			"__pycache__",
 		}
 
-		dockerignorePatterns, err := g.ReadDockerignorePatterns(buildContext)
+		dockerignorePatterns, err := imagebuilder.ReadDockerignorePatterns(buildContext)
 		if err != nil {
 			return "", fmt.Errorf("failed to read .dockerignore patterns: %w", err)
 		}
 		ignorePatterns = append(ignorePatterns, dockerignorePatterns...)
 
-		fullImageName, err := g.BuildContainerImageFromBaseImage(
+		fullImageName, err := imagebuilder.BuildContainerImageFromBaseImage(
 			project,
 			baseDockerImage,
 			buildContext,
@@ -263,7 +243,7 @@ func (g *GKEOrchestrator) generateAndApplyManifest(opts ManifestOptions, outputM
 		logging.Info("GKE manifest saved successfully.")
 	} else {
 		logging.Info("Applying GKE manifest to cluster...")
-		err = g.ApplyGKEManifest(gkeManifestContent, opts.ProjectID, opts.ClusterName, opts.ClusterLocation)
+		err = g.applyJobSetManifests([]byte(gkeManifestContent))
 		if err != nil {
 			return fmt.Errorf("failed to apply GKE manifest: %w", err)
 		}
@@ -505,283 +485,4 @@ func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, err
 		return "", fmt.Errorf("failed to execute jobset template: %w", err)
 	}
 	return buf.String(), nil
-}
-
-// ApplyGKEManifest applies the generated Kubernetes manifest to the GKE cluster
-func (g *GKEOrchestrator) ApplyGKEManifest(manifestContent string, projectID, clusterName, clusterLocation string) error {
-	tmpFile, err := os.CreateTemp("", "gke-manifest-*.yaml")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary GKE manifest file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
-
-	if _, err := tmpFile.WriteString(manifestContent); err != nil {
-		return fmt.Errorf("failed to write GKE manifest content to temporary file: %w", err)
-	}
-
-	logging.Info("Applying GKE manifest to cluster '%s' in '%s' for project '%s'...", clusterName, clusterLocation, projectID)
-	logging.Info("GKE Manifest YAML content:\n%s", manifestContent)
-
-	cmdArgs := []string{"kubectl", "apply", "-f", tmpFile.Name()}
-	logging.Info("Executing: %s", strings.Join(cmdArgs, " "))
-	res := shell.ExecuteCommand(cmdArgs[0], cmdArgs[1:]...)
-	if res.ExitCode != 0 {
-		return fmt.Errorf("kubectl apply failed with exit code %d: %s\n%s", res.ExitCode, res.Stderr, res.Stdout)
-	}
-
-	logging.Info("GKE manifest applied successfully.")
-	return nil
-}
-
-// BuildContainerImageFromBaseImage builds and pushes a container image.
-func (g *GKEOrchestrator) BuildContainerImageFromBaseImage(
-	project string,
-	baseDockerImage string,
-	scriptDir string,
-	platformStr string,
-	ignorePatterns []string,
-) (string, error) {
-	platform, err := g.parsePlatform(platformStr)
-	if err != nil {
-		return "", err
-	}
-
-	userName := os.Getenv("USER")
-	if userName == "" {
-		userName = "unknown"
-	}
-
-	tagRandomPrefix := g.generateRandomString(4)
-	tagDatetime := time.Now().Format("2006-01-02-15-04-05")
-	imageName := fmt.Sprintf("gcr.io/%s/%s-runner:%s-%s", project, userName, tagRandomPrefix, tagDatetime)
-
-	logrus.Infof("Starting image build process for %s", imageName)
-	logrus.Infof("Base Docker Image: %s", baseDockerImage)
-	logrus.Infof("Script Directory: %s", scriptDir)
-	logrus.Infof("Target Platform: %s", platform.String())
-
-	tempTarballPath, err := g.createFilteredTar(scriptDir, ignorePatterns)
-	if err != nil {
-		return "", fmt.Errorf("failed to create filtered tarball: %w", err)
-	}
-	defer func() {
-		if tempTarballPath != "" {
-			os.Remove(tempTarballPath)
-			logrus.Debugf("Cleaned up temporary tarball file: %s", tempTarballPath)
-		}
-	}()
-
-	tarLayer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
-		file, openErr := os.Open(tempTarballPath)
-		if openErr != nil {
-			return nil, fmt.Errorf("failed to open temporary tarball %q: %w", tempTarballPath, openErr)
-		}
-		return file, nil
-	}, tarball.WithCompression(compression.GZip))
-	if err != nil {
-		return "", fmt.Errorf("failed to create layer from tarball: %w", err)
-	}
-
-	baseRef, err := name.ParseReference(baseDockerImage)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse base image reference %q: %w", baseDockerImage, err)
-	}
-
-	baseImg, err := crane.Pull(baseRef.String(), crane.WithPlatform(&v1.Platform{OS: platform.OS, Architecture: platform.Architecture}))
-	if err != nil {
-		return "", fmt.Errorf("failed to pull base image %q: %w", baseDockerImage, err)
-	}
-
-	newImg, err := mutate.AppendLayers(baseImg, tarLayer)
-	if err != nil {
-		return "", fmt.Errorf("failed to append layer: %w", err)
-	}
-
-	imageRef, err := name.ParseReference(imageName)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse new image reference %q: %w", imageName, err)
-	}
-
-	logrus.Infof("Uploading Container Image to %s", imageName)
-	err = crane.Push(newImg, imageRef.String(), crane.WithPlatform(&v1.Platform{OS: platform.OS, Architecture: platform.Architecture}))
-	if err != nil {
-		return "", fmt.Errorf("failed to push image %q: %w", imageName, err)
-	}
-
-	logrus.Infof("Image %s built and uploaded successfully.", imageName)
-	return imageName, nil
-}
-
-// parsePlatform converts a platform string (e.g., "linux/amd64") into a v1.Platform struct.
-func (g *GKEOrchestrator) parsePlatform(platformStr string) (v1.Platform, error) {
-	parts := strings.Split(platformStr, "/")
-	if len(parts) != 2 {
-		return v1.Platform{}, fmt.Errorf("invalid platform format: %q, expected \"os/arch\"", platformStr)
-	}
-	return v1.Platform{
-		OS:           parts[0],
-		Architecture: parts[1],
-	}, nil
-}
-
-// generateRandomString generates a random string of specified length.
-func (g *GKEOrchestrator) generateRandomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyz"
-	var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
-	}
-	return string(b)
-}
-
-func (g *GKEOrchestrator) ReadDockerignorePatterns(dir string) ([]string, error) {
-	dockerignorePath := filepath.Join(dir, ".dockerignore")
-	_, err := os.Stat(dockerignorePath)
-	if os.IsNotExist(err) {
-		return []string{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat .dockerignore file %q: %w", dockerignorePath, err)
-	}
-
-	content, err := os.ReadFile(dockerignorePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read .dockerignore file %q: %w", dockerignorePath, err)
-	}
-
-	var patterns []string
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		patterns = append(patterns, line)
-	}
-	logrus.Infof("Found %d patterns in .dockerignore at %q", len(patterns), dockerignorePath)
-	return patterns, nil
-}
-
-// shouldIgnore checks if a file or directory should be ignored based on glob patterns.
-func (g *GKEOrchestrator) shouldIgnore(path string, info fs.FileInfo, relPath string, ignorePatterns []string) (bool, error) {
-	logrus.Debugf("shouldIgnore: Checking %q (IsDir: %t)", relPath, info.IsDir())
-	if relPath == "." {
-		return false, nil
-	}
-
-	segments := strings.Split(relPath, string(os.PathSeparator))
-
-	for _, pattern := range ignorePatterns {
-		logrus.Debugf("shouldIgnore: Matching %q against pattern %q", relPath, pattern)
-		matched, err := filepath.Match(pattern, relPath)
-		if err != nil {
-			logrus.Warnf("Invalid ignore pattern %q: %v", pattern, err)
-			continue
-		}
-		if matched {
-			logrus.Debugf("Ignoring %q due to full path pattern match %q", relPath, pattern)
-			if info.IsDir() {
-				return true, filepath.SkipDir
-			}
-			return true, nil
-		}
-
-		for _, segment := range segments {
-			if segment == pattern {
-				logrus.Debugf("Ignoring %q due to segment match %q", relPath, pattern)
-				if info.IsDir() {
-					return true, filepath.SkipDir
-				}
-				return true, nil
-			}
-		}
-
-		if strings.HasPrefix(relPath, pattern+string(os.PathSeparator)) {
-			logrus.Debugf("Ignoring %q due to directory prefix match %q", relPath, pattern)
-			if info.IsDir() {
-				return true, filepath.SkipDir
-			}
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// processTarEntry processes a single file or directory for tarball creation.
-func (g *GKEOrchestrator) processTarEntry(tarWriter *tar.Writer, sourceDir string, ignorePatterns []string, path string, info fs.FileInfo, errFromWalk error) error {
-	if errFromWalk != nil {
-		return errFromWalk
-	}
-
-	relPath, err := filepath.Rel(sourceDir, path)
-	if err != nil {
-		return fmt.Errorf("failed to get relative path for %q: %w", path, err)
-	}
-
-	logrus.Debugf("createFilteredTar: Processing path %q (IsDir: %t, IsRegular: %t)", path, info.IsDir(), info.Mode().IsRegular())
-
-	ignored, skipDirResult := g.shouldIgnore(path, info, relPath, ignorePatterns)
-	if ignored {
-		return skipDirResult
-	}
-
-	header, err := tar.FileInfoHeader(info, relPath)
-	if err != nil {
-		return fmt.Errorf("failed to create tar header for %q: %w", path, err)
-	}
-	header.Name = relPath
-
-	if err := tarWriter.WriteHeader(header); err != nil {
-		return fmt.Errorf("failed to write tar header for %q: %w", path, err)
-	}
-
-	if info.Mode().IsRegular() {
-		file, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("failed to open file %q: %w", path, err)
-		}
-		defer file.Close()
-
-		if _, err := io.Copy(tarWriter, file); err != nil {
-			return fmt.Errorf("failed to write file content for %q: %w", path, err)
-		}
-	}
-
-	return nil
-}
-
-func (g *GKEOrchestrator) createFilteredTar(sourceDir string, ignorePatterns []string) (string, error) {
-	tmpFile, err := os.CreateTemp("", "gcluster-build-context-*.tar.gz")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temporary file for tarball: %w", err)
-	}
-	defer tmpFile.Close()
-
-	gzipWriter := gzip.NewWriter(tmpFile)
-	tarWriter := tar.NewWriter(gzipWriter)
-
-	logrus.Infof("Creating filtered tar from %s to temporary file %s", sourceDir, tmpFile.Name())
-
-	var walkErr error
-	defer func() {
-		if closeErr := tarWriter.Close(); closeErr != nil && walkErr == nil {
-			walkErr = fmt.Errorf("failed to close tar writer: %w", closeErr)
-		}
-		if closeErr := gzipWriter.Close(); closeErr != nil && walkErr == nil {
-			walkErr = fmt.Errorf("failed to close gzip writer: %w", closeErr)
-		}
-	}()
-
-	walkErr = filepath.Walk(sourceDir, func(path string, info fs.FileInfo, err error) error {
-		return g.processTarEntry(tarWriter, sourceDir, ignorePatterns, path, info, err)
-	})
-
-	if walkErr != nil {
-		os.Remove(tmpFile.Name())
-		return "", walkErr
-	}
-
-	return tmpFile.Name(), nil
 }

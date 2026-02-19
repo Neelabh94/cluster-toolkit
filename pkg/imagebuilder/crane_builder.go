@@ -32,6 +32,8 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/moby/patternmatcher"
+	"github.com/moby/patternmatcher/ignorefile"
 	"github.com/sirupsen/logrus"
 )
 
@@ -51,7 +53,7 @@ func BuildContainerImageFromBaseImage(
 	baseDockerImage string,
 	scriptDir string,
 	platformStr string,
-	ignorePatterns []string,
+	ignoreMatcher *patternmatcher.PatternMatcher,
 ) (string, error) {
 	platform, err := parsePlatform(platformStr)
 	if err != nil {
@@ -73,7 +75,7 @@ func BuildContainerImageFromBaseImage(
 	logrus.Infof("Target Platform: %s/%s", platform.OS, platform.Architecture) // Corrected
 
 	// 1. Create a tarball in a temporary file from the scriptDir, applying ignore patterns.
-	tempTarballPath, err := createFilteredTar(scriptDir, ignorePatterns)
+	tempTarballPath, err := createFilteredTar(scriptDir, ignoreMatcher)
 	if err != nil {
 		return "", fmt.Errorf("failed to create filtered tarball: %w", err)
 	}
@@ -160,85 +162,38 @@ func generateRandomString(length int) string {
 	return string(b)
 }
 
-func ReadDockerignorePatterns(dir string) ([]string, error) {
+func ReadDockerignorePatterns(dir string, defaultPatterns []string) (*patternmatcher.PatternMatcher, error) {
 	dockerignorePath := filepath.Join(dir, ".dockerignore")
-	_, err := os.Stat(dockerignorePath)
-	if os.IsNotExist(err) {
-		return []string{}, nil // No .dockerignore file, return empty patterns
-	}
-	if err != nil {
+	
+	patterns := make([]string, len(defaultPatterns))
+	copy(patterns, defaultPatterns)
+
+	if _, err := os.Stat(dockerignorePath); err == nil {
+		file, err := os.Open(dockerignorePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open .dockerignore file %q: %w", dockerignorePath, err)
+		}
+		defer file.Close()
+
+		filePatterns, err := ignorefile.ReadAll(file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read .dockerignore file %q: %w", dockerignorePath, err)
+		}
+		patterns = append(patterns, filePatterns...)
+		logrus.Infof("Found %d patterns in .dockerignore at %q", len(filePatterns), dockerignorePath)
+	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to stat .dockerignore file %q: %w", dockerignorePath, err)
 	}
 
-	content, err := os.ReadFile(dockerignorePath)
+	matcher, err := patternmatcher.New(patterns)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read .dockerignore file %q: %w", dockerignorePath, err)
+		return nil, fmt.Errorf("failed to create pattern matcher: %w", err)
 	}
-
-	var patterns []string
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue // Skip empty lines and comments
-		}
-		patterns = append(patterns, line)
-	}
-	logrus.Infof("Found %d patterns in .dockerignore at %q", len(patterns), dockerignorePath)
-	return patterns, nil
-}
-
-// shouldIgnore checks if a file or directory should be ignored based on glob patterns.
-func shouldIgnore(path string, info fs.FileInfo, relPath string, ignorePatterns []string) (bool, error) {
-	logrus.Debugf("shouldIgnore: Checking %q (IsDir: %t)", relPath, info.IsDir())
-	if relPath == "." { // Never ignore the root directory itself
-		return false, nil
-	}
-
-	// Split relPath into segments
-	segments := strings.Split(relPath, string(os.PathSeparator))
-
-	for _, pattern := range ignorePatterns {
-		logrus.Debugf("shouldIgnore: Matching %q against pattern %q", relPath, pattern)
-		// 1. Check if the full relPath matches the pattern (for files like "*.log")
-		matched, err := filepath.Match(pattern, relPath)
-		if err != nil {
-			logrus.Warnf("Invalid ignore pattern %q: %v", pattern, err)
-			continue
-		}
-		if matched {
-			logrus.Debugf("Ignoring %q due to full path pattern match %q", relPath, pattern)
-			if info.IsDir() {
-				return true, filepath.SkipDir // Skip directory and its contents
-			}
-			return true, nil // Skip this file
-		}
-
-		// 2. Check if any segment of the relPath matches the pattern (for directory names like ".terraform")
-		for _, segment := range segments {
-			if segment == pattern {
-				logrus.Debugf("Ignoring %q due to segment match %q", relPath, pattern)
-				if info.IsDir() {
-					return true, filepath.SkipDir
-				}
-				return true, nil
-			}
-		}
-
-		// 3. Check for directory prefixes (e.g., if pattern is "foo" and relPath is "foo/bar")
-		if strings.HasPrefix(relPath, pattern+string(os.PathSeparator)) {
-			logrus.Debugf("Ignoring %q due to directory prefix match %q", relPath, pattern)
-			if info.IsDir() {
-				return true, filepath.SkipDir
-			}
-			return true, nil
-		}
-	}
-	return false, nil
+	return matcher, nil
 }
 
 // processTarEntry processes a single file or directory for tarball creation.
-func processTarEntry(tarWriter *tar.Writer, sourceDir string, ignorePatterns []string, path string, info fs.FileInfo, errFromWalk error) error {
+func processTarEntry(tarWriter *tar.Writer, sourceDir string, ignoreMatcher *patternmatcher.PatternMatcher, path string, info fs.FileInfo, errFromWalk error) error {
 	if errFromWalk != nil {
 		return errFromWalk
 	}
@@ -248,12 +203,32 @@ func processTarEntry(tarWriter *tar.Writer, sourceDir string, ignorePatterns []s
 		return fmt.Errorf("failed to get relative path for %q: %w", path, err)
 	}
 
-	logrus.Debugf("createFilteredTar: Processing path %q (IsDir: %t, IsRegular: %t)", path, info.IsDir(), info.Mode().IsRegular())
-
-	ignored, skipDirResult := shouldIgnore(path, info, relPath, ignorePatterns)
-	if ignored {
-		return skipDirResult
+	if relPath == "." {
+		return nil
 	}
+
+	// Fix for directory matching: append a slash to the relative path if it's a directory
+	// logic from patterns.go in moby/patternmatcher
+	relPathSlash := filepath.ToSlash(relPath)
+	if info.IsDir() && !strings.HasSuffix(relPathSlash, "/") {
+		relPathSlash += "/"
+	}
+
+	ignored, err := ignoreMatcher.MatchesOrParentMatches(relPathSlash)
+	if err != nil {
+		return fmt.Errorf("failed to check ignore patterns for %q: %w", path, err)
+	}
+
+	if ignored {
+		if info.IsDir() {
+			logrus.Debugf("Ignoring directory %q", relPath)
+			return filepath.SkipDir
+		}
+		logrus.Debugf("Ignoring file %q", relPath)
+		return nil
+	}
+
+	logrus.Debugf("createFilteredTar: Processing path %q (IsDir: %t, IsRegular: %t)", path, info.IsDir(), info.Mode().IsRegular())
 
 	header, err := tar.FileInfoHeader(info, relPath)
 	if err != nil {
@@ -280,7 +255,7 @@ func processTarEntry(tarWriter *tar.Writer, sourceDir string, ignorePatterns []s
 	return nil
 }
 
-func createFilteredTar(sourceDir string, ignorePatterns []string) (string, error) { // Changed return type
+func createFilteredTar(sourceDir string, ignoreMatcher *patternmatcher.PatternMatcher) (string, error) { // Changed return type
 	tmpFile, err := os.CreateTemp("", "gcluster-build-context-*.tar.gz")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary file for tarball: %w", err)
@@ -304,7 +279,7 @@ func createFilteredTar(sourceDir string, ignorePatterns []string) (string, error
 	}()
 
 	walkErr = filepath.Walk(sourceDir, func(path string, info fs.FileInfo, err error) error {
-		return processTarEntry(tarWriter, sourceDir, ignorePatterns, path, info, err)
+		return processTarEntry(tarWriter, sourceDir, ignoreMatcher, path, info, err)
 	})
 
 	if walkErr != nil {

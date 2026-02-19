@@ -27,7 +27,6 @@ require (
 	github.com/google/go-containerregistry v0.20.7
 	github.com/hashicorp/terraform-exec v0.24.0
 	github.com/mattn/go-isatty v0.0.20
-	github.com/moby/patternmatcher v0.6.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/zclconf/go-cty-debug v0.0.0-20240509010212-0d6042c53940
 	google.golang.org/api v0.256.0
@@ -81,6 +80,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/hashicorp/terraform-json v0.27.1 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/moby/patternmatcher v0.6.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/otiai10/mint v1.6.3 // indirect

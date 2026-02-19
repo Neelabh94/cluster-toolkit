@@ -194,18 +194,17 @@ func (g *GKEOrchestrator) buildDockerImage(project, baseDockerImage, buildContex
 			"__pycache__",
 		}
 
-		dockerignorePatterns, err := imagebuilder.ReadDockerignorePatterns(buildContext)
+		ignoreMatcher, err := imagebuilder.ReadDockerignorePatterns(buildContext, ignorePatterns)
 		if err != nil {
 			return "", fmt.Errorf("failed to read .dockerignore patterns: %w", err)
 		}
-		ignorePatterns = append(ignorePatterns, dockerignorePatterns...)
 
 		fullImageName, err := imagebuilder.BuildContainerImageFromBaseImage(
 			project,
 			baseDockerImage,
 			buildContext,
 			platformStr,
-			ignorePatterns,
+			ignoreMatcher,
 		)
 		if err != nil {
 			return "", fmt.Errorf("crane-based image build failed: %w", err)
@@ -281,6 +280,21 @@ func (g *GKEOrchestrator) installJobSetCRD(jobSetManifestsURL string) error {
 	}
 
 	logging.Info("JobSet CRD installed successfully.")
+
+	return g.waitForJobSetWebhook()
+}
+
+// waitForJobSetWebhook waits for the JobSet controller manager deployment to be available.
+func (g *GKEOrchestrator) waitForJobSetWebhook() error {
+	logging.Info("Waiting for JobSet webhook service to be ready...")
+	// Wait for the deployment to be available.
+	// We use a generous timeout because pulling images might take time on some clusters.
+	cmd := shell.NewCommand("kubectl", "rollout", "status", "deployment/jobset-controller-manager", "-n", "jobset-system", "--timeout=300s")
+	res := cmd.Execute()
+	if res.ExitCode != 0 {
+		return fmt.Errorf("jobset controller manager failed to become ready: %s\n%s", res.Stderr, res.Stdout)
+	}
+	logging.Info("JobSet webhook service is ready.")
 	return nil
 }
 

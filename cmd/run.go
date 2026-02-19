@@ -16,7 +16,8 @@ package cmd
 
 import (
 	"hpc-toolkit/pkg/logging"
-	"hpc-toolkit/pkg/run" // Import the new run package
+	"hpc-toolkit/pkg/orchestrator"
+	"hpc-toolkit/pkg/orchestrator/gke"
 
 	"github.com/spf13/cobra"
 )
@@ -103,18 +104,17 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 		logging.Fatal("A --build-context must be provided when --base-docker-image is used for a Crane build.")
 	}
 
-	runOpts := run.RunOptions{
-		DockerImage:     dockerImage,
-		BaseDockerImage: baseDockerImage,
-		BuildContext:    buildContext,
-		Platform:        platform, // Pass the new platform flag
-		CommandToRun:    commandToRun,
-		AcceleratorType: acceleratorType,
-		OutputManifest:  outputManifest,
-		ProjectID:       projectID,
-		ClusterName:     clusterName,
-		ClusterLocation: clusterLocation,
-		// JobSet and Kueue related options
+	jobDef := orchestrator.JobDefinition{
+		DockerImage:             dockerImage,
+		BaseDockerImage:         baseDockerImage,
+		BuildContext:            buildContext,
+		Platform:                platform,
+		CommandToRun:            commandToRun,
+		AcceleratorType:         acceleratorType,
+		OutputManifest:          outputManifest,
+		ProjectID:               projectID,
+		ClusterName:             clusterName,
+		ClusterLocation:         clusterLocation,
 		WorkloadName:            workloadName,
 		KueueQueueName:          kueueQueueName,
 		NumSlices:               numSlices,
@@ -123,7 +123,12 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 		TtlSecondsAfterFinished: ttlSecondsAfterFinished,
 	}
 
-	if err := run.ExecuteRun(runOpts); err != nil {
+	gkeOrchestrator, err := gke.NewGKEOrchestrator()
+	if err != nil {
+		logging.Fatal("Failed to create GKE orchestrator: %v", err)
+	}
+
+	if err := gkeOrchestrator.SubmitJob(jobDef); err != nil {
 		logging.Fatal("gcluster run failed: %v", err)
 	}
 }

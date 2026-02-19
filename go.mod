@@ -31,7 +31,6 @@ require (
 	github.com/zclconf/go-cty-debug v0.0.0-20240509010212-0d6042c53940
 	google.golang.org/api v0.256.0
 	gopkg.in/yaml.v2 v2.4.0
-	sigs.k8s.io/yaml v1.6.0
 )
 
 require (

@@ -31,7 +31,6 @@ require (
 	github.com/zclconf/go-cty-debug v0.0.0-20240509010212-0d6042c53940
 	google.golang.org/api v0.256.0
 	gopkg.in/yaml.v2 v2.4.0
-	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -98,7 +97,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.39.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

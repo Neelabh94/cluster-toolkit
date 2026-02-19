@@ -1,4 +1,0 @@
-# Add any Python packages your application needs here
-# Example:
-# numpy==1.26.4
-# pandas==2.2.0

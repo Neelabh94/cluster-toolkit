@@ -50,7 +50,7 @@ func init() {
 	runCmd.Flags().StringVar(&baseDockerImage, "base-docker-image", "", "Name of the base Docker image for Crane to build upon (e.g., python:3.9-slim). Requires --build-context.")
 	runCmd.Flags().StringVarP(&buildContext, "build-context", "c", "", "Path to the build context directory for Crane (e.g., .). Required with --base-docker-image.")
 	runCmd.Flags().StringVarP(&commandToRun, "command", "e", "", "Command to execute in the container (e.g., 'python train.py'). Required.")
-	runCmd.Flags().StringVarP(&acceleratorType, "accelerator-type", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100', 'tpu-v4-podslice'). Required.")
+	runCmd.Flags().StringVarP(&acceleratorType, "accelerator-type", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
 	runCmd.Flags().StringVarP(&outputManifest, "output-manifest", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
 	runCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster to deploy the workload to. Required.")
 	runCmd.Flags().StringVar(&clusterLocation, "cluster-location", "", "Location (zone or region) of the GKE cluster. Required.")
@@ -59,7 +59,7 @@ func init() {
 
 	// JobSet and Kueue flags
 	runCmd.Flags().StringVarP(&workloadName, "workload-name", "w", "", "Name of the workload (JobSet) to create. Required.")
-	runCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "default-queue", "Name of the Kueue LocalQueue to submit the workload to.")
+	runCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "", "Name of the Kueue LocalQueue to submit the workload to. If empty, it will be auto-discovered.")
 	runCmd.Flags().IntVar(&numSlices, "num-slices", 1, "Number of JobSet replicas (slices).")
 	runCmd.Flags().IntVar(&vmsPerSlice, "vms-per-slice", 1, "Number of VMs (pods) per slice.")
 	runCmd.Flags().IntVar(&maxRestarts, "max-restarts", 1, "Maximum number of restarts for the JobSet before failing.")

@@ -31,7 +31,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// JobSetTemplate remains the same...
 const JobSetTemplate = `
 apiVersion: jobset.x-k8s.io/v1alpha2
 kind: JobSet
@@ -213,25 +212,21 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 
 	// 3. Patch the ClusterQueue to add CPU and Memory with high quotas
 	logging.Info("Patching ClusterQueue '%s' to include CPU and Memory quotas...", cqName)
-
-	patch := fmt.Sprintf(`[
+	// Fixed: Removed fmt.Sprintf to resolve staticcheck S1039 lint error.
+	patch := `[
 		{"op": "add", "path": "/spec/resourceGroups/0/coveredResources/-", "value": "cpu"},
 		{"op": "add", "path": "/spec/resourceGroups/0/coveredResources/-", "value": "memory"},
 		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "cpu", "nominalQuota": "500"}},
 		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "memory", "nominalQuota": "2000Gi"}}
-	]`)
-
+	]`
 	res = shell.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
 	if res.ExitCode != 0 {
-		// If JSON patch fails because resources array doesn't exist, we skip or use a merge patch
 		return fmt.Errorf("failed to patch clusterqueue: %s", res.Stderr)
 	}
 
 	logging.Info("ClusterQueue successfully updated.")
 	return nil
 }
-
-// All other functions (getProjectID, resolveKueueQueue, resolveAcceleratorType, buildDockerImage, etc.) remain identical to your previous version...
 
 func (g *GKEOrchestrator) getProjectID(initialProjectID string) (string, error) {
 	if initialProjectID == "" {
@@ -633,78 +628,28 @@ func (g *GKEOrchestrator) GenerateGKENodeSelectorLabel(acceleratorType string) s
 	}
 }
 
+// GenerateGKEManifest refactored to reduce cyclomatic complexity.
 func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, error) {
-	workloadName := opts.WorkloadName
-	if workloadName == "" {
-		workloadName = "gcluster-workload-" + shell.RandomString(8)
+	if opts.WorkloadName == "" {
+		opts.WorkloadName = "gcluster-workload-" + shell.RandomString(8)
+	}
+	if opts.KueueQueueName == "" {
+		opts.KueueQueueName = "default-queue"
+	}
+	if opts.NumSlices == 0 {
+		opts.NumSlices = 1
+	}
+	if opts.VmsPerSlice == 0 {
+		opts.VmsPerSlice = 1
+	}
+	if opts.MaxRestarts == 0 {
+		opts.MaxRestarts = 1
+	}
+	if opts.TtlSecondsAfterFinished == 0 {
+		opts.TtlSecondsAfterFinished = 3600
 	}
 
-	kueueQueueName := opts.KueueQueueName
-	if kueueQueueName == "" {
-		kueueQueueName = "default-queue"
-	}
-
-	numSlices := opts.NumSlices
-	if numSlices == 0 {
-		numSlices = 1
-	}
-
-	vmsPerSlice := opts.VmsPerSlice
-	if vmsPerSlice == 0 {
-		vmsPerSlice = 1
-	}
-
-	maxRestarts := opts.MaxRestarts
-	if maxRestarts == 0 {
-		maxRestarts = 1
-	}
-
-	ttlSecondsAfterFinished := opts.TtlSecondsAfterFinished
-	if ttlSecondsAfterFinished == 0 {
-		ttlSecondsAfterFinished = 3600
-	}
-
-	acceleratorTypeLabel := g.GenerateGKENodeSelectorLabel(opts.AcceleratorType)
-	var gpuLimit, tpuLimit, cpuLimit, memoryLimit string
-
-	switch opts.AcceleratorType {
-	case "nvidia-h100-mega-80gb", "nvidia-h100-80gb", "nvidia-b200":
-		gpuLimit = "8"
-		cpuLimit = "1"
-		memoryLimit = "4Gi"
-	case "nvidia-gb200":
-		gpuLimit = "4"
-		cpuLimit = "1"
-		memoryLimit = "4Gi"
-	case "nvidia-a100-80gb", "nvidia-tesla-a100":
-		gpuLimit = "1"
-		cpuLimit = "1"
-		memoryLimit = "4Gi"
-	case "nvidia-l4":
-		gpuLimit = "1"
-		cpuLimit = "1"
-		memoryLimit = "4Gi"
-	case "tpu-v4-podslice", "tpu-v5p-slice", "tpu-v5-lite-podslice", "tpu-v5-lite-device", "tpu-v6e-slice":
-		tpuLimit = "4"
-		cpuLimit = "1"
-		memoryLimit = "4Gi"
-	case "":
-		cpuLimit = "0.5"
-		memoryLimit = "512Mi"
-	default:
-		if strings.Contains(strings.ToLower(opts.AcceleratorType), "nvidia") {
-			gpuLimit = "1"
-			cpuLimit = "1"
-			memoryLimit = "4Gi"
-		} else if strings.Contains(strings.ToLower(opts.AcceleratorType), "tpu") {
-			tpuLimit = "4"
-			cpuLimit = "1"
-			memoryLimit = "4Gi"
-		} else {
-			cpuLimit = "0.5"
-			memoryLimit = "512Mi"
-		}
-	}
+	gpuLimit, tpuLimit, cpuLimit, memoryLimit := g.getAcceleratorConfig(opts.AcceleratorType)
 
 	resourcesString := fmt.Sprintf("                resources:\n                  limits:\n                    cpu: %s\n                    memory: %s", cpuLimit, memoryLimit)
 	if gpuLimit != "" {
@@ -715,8 +660,36 @@ func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, err
 	}
 
 	escapedCommand := strings.ReplaceAll(opts.CommandToRun, "\"", "\\\"")
-	updatedCommand := fmt.Sprintf("                command: [\"/bin/bash\", \"-c\", \"%s\"]\n%s", escapedCommand, resourcesString)
+	opts.CommandToRun = fmt.Sprintf("                command: [\"/bin/bash\", \"-c\", \"%s\"]\n%s", escapedCommand, resourcesString)
 
+	return g.populateManifestTemplate(opts)
+}
+
+// getAcceleratorConfig handles hardware-specific resource limits.
+func (g *GKEOrchestrator) getAcceleratorConfig(accelType string) (gpu, tpu, cpu, mem string) {
+	switch accelType {
+	case "nvidia-h100-mega-80gb", "nvidia-h100-80gb", "nvidia-b200":
+		return "8", "", "1", "4Gi"
+	case "nvidia-gb200":
+		return "4", "", "1", "4Gi"
+	case "nvidia-a100-80gb", "nvidia-tesla-a100", "nvidia-l4":
+		return "1", "", "1", "4Gi"
+	case "tpu-v4-podslice", "tpu-v5p-slice", "tpu-v5-lite-podslice", "tpu-v5-lite-device", "tpu-v6e-slice":
+		return "", "4", "1", "4Gi"
+	case "":
+		return "", "", "0.5", "512Mi"
+	default:
+		if strings.Contains(strings.ToLower(accelType), "nvidia") {
+			return "1", "", "1", "4Gi"
+		} else if strings.Contains(strings.ToLower(accelType), "tpu") {
+			return "", "4", "1", "4Gi"
+		}
+		return "", "", "0.5", "512Mi"
+	}
+}
+
+// populateManifestTemplate fills the JobSet template with provided options.
+func (g *GKEOrchestrator) populateManifestTemplate(opts ManifestOptions) (string, error) {
 	tmpl, err := template.New("jobSet").Parse(JobSetTemplate)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse jobset template: %w", err)
@@ -733,15 +706,15 @@ func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, err
 		CommandToRun            string
 		AcceleratorTypeLabel    string
 	}{
-		WorkloadName:            workloadName,
-		KueueQueueName:          kueueQueueName,
-		TtlSecondsAfterFinished: ttlSecondsAfterFinished,
-		MaxRestarts:             maxRestarts,
-		NumSlices:               numSlices,
-		VmsPerSlice:             vmsPerSlice,
+		WorkloadName:            opts.WorkloadName,
+		KueueQueueName:          opts.KueueQueueName,
+		TtlSecondsAfterFinished: opts.TtlSecondsAfterFinished,
+		MaxRestarts:             opts.MaxRestarts,
+		NumSlices:               opts.NumSlices,
+		VmsPerSlice:             opts.VmsPerSlice,
 		FullImageName:           opts.FullImageName,
-		CommandToRun:            updatedCommand,
-		AcceleratorTypeLabel:    acceleratorTypeLabel,
+		CommandToRun:            opts.CommandToRun,
+		AcceleratorTypeLabel:    g.GenerateGKENodeSelectorLabel(opts.AcceleratorType),
 	}
 
 	var buf bytes.Buffer

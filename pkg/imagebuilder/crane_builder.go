@@ -164,7 +164,7 @@ func generateRandomString(length int) string {
 
 func ReadDockerignorePatterns(dir string, defaultPatterns []string) (*patternmatcher.PatternMatcher, error) {
 	dockerignorePath := filepath.Join(dir, ".dockerignore")
-	
+
 	patterns := make([]string, len(defaultPatterns))
 	copy(patterns, defaultPatterns)
 
@@ -192,43 +192,52 @@ func ReadDockerignorePatterns(dir string, defaultPatterns []string) (*patternmat
 	return matcher, nil
 }
 
-// processTarEntry processes a single file or directory for tarball creation.
+func isPathIgnored(relPath string, info fs.FileInfo, matcher *patternmatcher.PatternMatcher) (bool, error) {
+	relPathSlash := filepath.ToSlash(relPath)
+	if info.IsDir() && !strings.HasSuffix(relPathSlash, "/") {
+		relPathSlash += "/"
+	}
+
+	ignored, err := matcher.MatchesOrParentMatches(relPathSlash)
+	if err != nil {
+		return false, fmt.Errorf("failed to check ignore patterns: %w", err)
+	}
+	return ignored, nil
+}
+
+func writeFileContent(tarWriter *tar.Writer, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open file %q: %w", path, err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(tarWriter, file); err != nil {
+		return fmt.Errorf("failed to write file content for %q: %w", path, err)
+	}
+	return nil
+}
+
 func processTarEntry(tarWriter *tar.Writer, sourceDir string, ignoreMatcher *patternmatcher.PatternMatcher, path string, info fs.FileInfo, errFromWalk error) error {
 	if errFromWalk != nil {
 		return errFromWalk
 	}
 
 	relPath, err := filepath.Rel(sourceDir, path)
+	if err != nil || relPath == "." {
+		return err
+	}
+
+	ignored, err := isPathIgnored(relPath, info, ignoreMatcher)
 	if err != nil {
-		return fmt.Errorf("failed to get relative path for %q: %w", path, err)
+		return err
 	}
-
-	if relPath == "." {
-		return nil
-	}
-
-	// Fix for directory matching: append a slash to the relative path if it's a directory
-	// logic from patterns.go in moby/patternmatcher
-	relPathSlash := filepath.ToSlash(relPath)
-	if info.IsDir() && !strings.HasSuffix(relPathSlash, "/") {
-		relPathSlash += "/"
-	}
-
-	ignored, err := ignoreMatcher.MatchesOrParentMatches(relPathSlash)
-	if err != nil {
-		return fmt.Errorf("failed to check ignore patterns for %q: %w", path, err)
-	}
-
 	if ignored {
 		if info.IsDir() {
-			logrus.Debugf("Ignoring directory %q", relPath)
 			return filepath.SkipDir
 		}
-		logrus.Debugf("Ignoring file %q", relPath)
 		return nil
 	}
-
-	logrus.Debugf("createFilteredTar: Processing path %q (IsDir: %t, IsRegular: %t)", path, info.IsDir(), info.Mode().IsRegular())
 
 	header, err := tar.FileInfoHeader(info, relPath)
 	if err != nil {
@@ -241,15 +250,7 @@ func processTarEntry(tarWriter *tar.Writer, sourceDir string, ignoreMatcher *pat
 	}
 
 	if info.Mode().IsRegular() {
-		file, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("failed to open file %q: %w", path, err)
-		}
-		defer file.Close()
-
-		if _, err := io.Copy(tarWriter, file); err != nil {
-			return fmt.Errorf("failed to write file content for %q: %w", path, err)
-		}
+		return writeFileContent(tarWriter, path)
 	}
 
 	return nil

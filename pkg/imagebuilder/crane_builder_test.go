@@ -70,7 +70,7 @@ func TestPatternMatcherIntegration(t *testing.T) {
 			ignorePatterns: []string{"*.log", "!important.log"},
 			path:           "important.log",
 			isDir:          false,
-			wantIgnored:    false, 
+			wantIgnored:    false,
 		},
 		{
 			name:           "Double star",

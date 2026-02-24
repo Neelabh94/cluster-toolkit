@@ -36,10 +36,49 @@ type JobDefinition struct {
 	VmsPerSlice             int
 	MaxRestarts             int
 	TtlSecondsAfterFinished int
+
+	// Scheduling & Security
+	PlacementPolicy    string
+	NodeSelector       map[string]string
+	Affinity           map[string]string
+	PodFailurePolicy   map[string]interface{}
+	RestartOnExitCodes []int
+
+	ImagePullSecrets   string
+	ServiceAccountName string
+}
+
+// JobStatus holds the status information of a job.
+type JobStatus struct {
+	Name           string
+	Status         string
+	CreationTime   string
+	CompletionTime string
+}
+
+// ListOptions holds parameters for listing jobs.
+type ListOptions struct {
+	ProjectID       string
+	ClusterName     string
+	ClusterLocation string
+	// Filters
+	Status       string
+	NameContains string
+}
+
+// DeleteOptions holds parameters for deleting jobs.
+type DeleteOptions struct {
+	ProjectID       string
+	ClusterName     string
+	ClusterLocation string
 }
 
 // Orchestrator defines the interface for submitting and managing jobs on a cluster.
 type Orchestrator interface {
 	// SubmitJob takes a JobDefinition and orchestrates its deployment.
 	SubmitJob(job JobDefinition) error
+	// ListJobs lists the jobs managed by the orchestrator.
+	ListJobs(opts ListOptions) ([]JobStatus, error)
+	// DeleteJob deletes a job by name.
+	DeleteJob(name string, opts DeleteOptions) error
 }

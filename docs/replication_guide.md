@@ -206,6 +206,100 @@ Verify that the Kubernetes JobSet ran successfully on your GKE cluster.
     This is a sample application running on GKE.
     ```
 
+## 8. Verify Phase 2 Features (Advanced Scheduling & Lifecycle)
+
+Phase 2 introduces job lifecycle management (`list`, `delete`) and advanced scheduling flags.
+
+### 8.1 List Jobs
+
+You can now list the status of jobs directly through `gcluster`.
+
+```bash
+./gcluster list jobs \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-location us-central1
+```
+
+You should see a table output with `NAME`, `STATUS`, `CREATION_TIME`, and `COMPLETION_TIME`.
+
+### 8.2 Run with Advanced Scheduling Flags
+
+### 8.3 Run with Advanced Scheduling Flags
+
+Try running a job with advanced scheduling options.
+
+**Example 1: Target Specific Nodes (Machine Label)**
+Use `--machine-label` to target specific hardware (e.g., C2 nodes).
+
+```bash
+./gcluster run \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-location us-central1 \
+  --base-docker-image python:3.9-slim \
+  --build-context job_details \
+  --command "python app.py" \
+  --workload-name my-machine-job \
+  --machine-label "node.kubernetes.io/instance-type=c2-standard-60"
+```
+
+**Example 2: Use Placement Policy**
+Use `--placement-policy` to specify a GKE Placement Policy (e.g., for compact placement to reduce latency).
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-compact-job \
+  --placement-policy "compact-placement"
+```
+
+*(Note: requires a `PlacementPolicy` resource named `compact-placement` to exist on the cluster)*
+
+**Example 3: Pod Failure Policy**
+Use `--restart-on-exit-codes` to ignore specific exit codes (e.g., treating exit code 1 as success or retriable non-failure).
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-robust-job \
+  --restart-on-exit-codes 0,1,137
+```
+
+(Note: Exit code 0 is always ignored by default)
+
+**Example 4: Private Registry & Service Account**
+Use `--image-pull-secret` and `--service-account` for secure workloads.
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-secure-job \
+  --image-pull-secret "my-private-registry-secret" \
+  --service-account "my-workload-sa"
+```
+
+### 8.4 Delete Jobs
+
+You can clean up specific jobs without destroying the entire cluster.
+
+```bash
+./gcluster delete job my-python-app-job \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-location us-central1
+```
+
+Verify it's gone by running `gcluster list jobs` again.
+
+### 8.5 Job Retention (TTL)
+
+By default, finished jobs are kept for 1 hour (3600 seconds). You can change this using `--ttl-seconds-after-finished`.
+
+```bash
+./gcluster run ... --ttl-seconds-after-finished 600 # Keep for only 10 minutes
+```
+
 ## 9. Cleanup
 
 To avoid incurring unnecessary costs, destroy the deployed GKE cluster and its resources:

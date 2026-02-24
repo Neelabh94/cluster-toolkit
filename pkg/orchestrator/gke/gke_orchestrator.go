@@ -16,17 +16,25 @@ package gke
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"hpc-toolkit/pkg/imagebuilder"
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
+	"hpc-toolkit/pkg/scheduling"
 	"hpc-toolkit/pkg/shell"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 	"text/template"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"gopkg.in/yaml.v2"
 )
@@ -51,6 +59,10 @@ spec:
           parallelism: {{.VmsPerSlice}}
           completions: {{.VmsPerSlice}}
           backoffLimit: 0
+{{- if .PodFailurePolicy }}
+          podFailurePolicy:
+{{.PodFailurePolicy}}
+{{- end }}
           template:
             metadata:
               labels:
@@ -67,10 +79,22 @@ spec:
               volumes:
               - name: temp-storage
                 emptyDir: {}
-{{- if .AcceleratorTypeLabel }}
+{{- if .NodeSelector }}
               nodeSelector:
-                cloud.google.com/gke-accelerator: {{.AcceleratorTypeLabel}}
+{{.NodeSelector}}
 {{- end }}
+{{- if .Affinity }}
+              affinity:
+{{.Affinity}}
+{{- end }}
+{{- if .ImagePullSecrets }}
+              imagePullSecrets:
+{{.ImagePullSecrets}}
+{{- end }}
+{{- if .ServiceAccountName }}
+              serviceAccountName: {{.ServiceAccountName}}
+{{- end }}
+
 `
 
 type ManifestOptions struct {
@@ -87,6 +111,11 @@ type ManifestOptions struct {
 	VmsPerSlice             int
 	MaxRestarts             int
 	TtlSecondsAfterFinished int
+	NodeSelector       string
+	Affinity           string
+	PodFailurePolicy   string
+	ImagePullSecrets   string
+	ServiceAccountName string
 }
 
 type GKEOrchestrator struct{}
@@ -117,7 +146,6 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 	}
 	job.KueueQueueName = localQueue
 
-	// --- NEW: AUTO-UPDATE CLUSTER QUEUE RESOURCES ---
 	logging.Info("Ensuring Kueue ClusterQueue covers all requested resources...")
 	if err := g.ensureClusterQueueCoverage(job.KueueQueueName); err != nil {
 		logging.Info("Warning: Could not automatically update ClusterQueue: %v. Workload might remain suspended.", err)
@@ -139,20 +167,12 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 		return err
 	}
 
-	err = g.generateAndApplyManifest(ManifestOptions{
-		WorkloadName:            job.WorkloadName,
-		FullImageName:           fullImageName,
-		CommandToRun:            job.CommandToRun,
-		AcceleratorType:         job.AcceleratorType,
-		ProjectID:               job.ProjectID,
-		ClusterName:             job.ClusterName,
-		ClusterLocation:         job.ClusterLocation,
-		KueueQueueName:          job.KueueQueueName,
-		NumSlices:               job.NumSlices,
-		VmsPerSlice:             job.VmsPerSlice,
-		MaxRestarts:             job.MaxRestarts,
-		TtlSecondsAfterFinished: job.TtlSecondsAfterFinished,
-	}, job.OutputManifest)
+	manifestOpts, err := g.prepareManifestOptions(job, fullImageName)
+	if err != nil {
+		return err
+	}
+
+	err = g.generateAndApplyManifest(manifestOpts, job.OutputManifest)
 	if err != nil {
 		return err
 	}
@@ -161,19 +181,16 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 	return nil
 }
 
-// ensureClusterQueueCoverage checks the ClusterQueue and patches it to include cpu/memory if missing
 func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) error {
-	// 1. Get the ClusterQueue name associated with the LocalQueue
 	res := shell.ExecuteCommand("kubectl", "get", "localqueue", localQueueName, "-n", "default", "-o", "jsonpath={.spec.clusterQueue}")
 	if res.ExitCode != 0 {
 		return fmt.Errorf("failed to find clusterqueue for %s: %s", localQueueName, res.Stderr)
 	}
 	cqName := strings.TrimSpace(res.Stdout)
 	if cqName == "" {
-		cqName = localQueueName // Fallback to same name if not specified
+		cqName = localQueueName
 	}
 
-	// 2. Check if CPU/Memory are already covered
 	res = shell.ExecuteCommand("kubectl", "get", "clusterqueue", cqName, "-o", "json")
 	if res.ExitCode != 0 {
 		return fmt.Errorf("failed to get clusterqueue %s: %s", cqName, res.Stderr)
@@ -184,7 +201,6 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 		return err
 	}
 
-	// Navigate the JSON to find coveredResources
 	spec := cq["spec"].(map[string]interface{})
 	rgList := spec["resourceGroups"].([]interface{})
 	if len(rgList) == 0 {
@@ -210,17 +226,17 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 		return nil
 	}
 
-	// 3. Patch the ClusterQueue to add CPU and Memory with high quotas
 	logging.Info("Patching ClusterQueue '%s' to include CPU and Memory quotas...", cqName)
-	// Fixed: Removed fmt.Sprintf to resolve staticcheck S1039 lint error.
 	patch := `[
 		{"op": "add", "path": "/spec/resourceGroups/0/coveredResources/-", "value": "cpu"},
 		{"op": "add", "path": "/spec/resourceGroups/0/coveredResources/-", "value": "memory"},
 		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "cpu", "nominalQuota": "500"}},
 		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "memory", "nominalQuota": "2000Gi"}}
 	]`
+
 	res = shell.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
 	if res.ExitCode != 0 {
+		// If JSON patch fails because resources array doesn't exist, we skip or use a merge patch
 		return fmt.Errorf("failed to patch clusterqueue: %s", res.Stderr)
 	}
 
@@ -628,8 +644,37 @@ func (g *GKEOrchestrator) GenerateGKENodeSelectorLabel(acceleratorType string) s
 	}
 }
 
-// GenerateGKEManifest refactored to reduce cyclomatic complexity.
 func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, error) {
+	g.setManifestDefaults(&opts)
+
+	cpuLimit, memoryLimit, gpuLimit, tpuLimit := g.calculateResourceLimits(opts.AcceleratorType)
+
+	resourcesString := fmt.Sprintf("                resources:\n                  limits:\n                    cpu: %s\n                    memory: %s", cpuLimit, memoryLimit)
+	if gpuLimit != "" {
+		resourcesString += fmt.Sprintf("\n                    nvidia.com/gpu: %s", gpuLimit)
+	}
+	if tpuLimit != "" {
+		resourcesString += fmt.Sprintf("\n                    google.com/tpu: %s", tpuLimit)
+	}
+
+	escapedCommand := strings.ReplaceAll(opts.CommandToRun, "\"", "\\\"")
+	updatedCommand := fmt.Sprintf("                command: [\"/bin/bash\", \"-c\", \"%s\"]\n%s", escapedCommand, resourcesString)
+
+	tmpl, err := template.New("jobSet").Parse(JobSetTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse jobset template: %w", err)
+	}
+
+	data := g.prepareJobSetTemplateData(opts, updatedCommand)
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute jobset template: %w", err)
+	}
+	return buf.String(), nil
+}
+
+func (g *GKEOrchestrator) setManifestDefaults(opts *ManifestOptions) {
 	if opts.WorkloadName == "" {
 		opts.WorkloadName = "gcluster-workload-" + shell.RandomString(8)
 	}
@@ -648,54 +693,35 @@ func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, err
 	if opts.TtlSecondsAfterFinished == 0 {
 		opts.TtlSecondsAfterFinished = 3600
 	}
-
-	gpuLimit, tpuLimit, cpuLimit, memoryLimit := g.getAcceleratorConfig(opts.AcceleratorType)
-
-	resourcesString := fmt.Sprintf("                resources:\n                  limits:\n                    cpu: %s\n                    memory: %s", cpuLimit, memoryLimit)
-	if gpuLimit != "" {
-		resourcesString += fmt.Sprintf("\n                    nvidia.com/gpu: %s", gpuLimit)
-	}
-	if tpuLimit != "" {
-		resourcesString += fmt.Sprintf("\n                    google.com/tpu: %s", tpuLimit)
-	}
-
-	escapedCommand := strings.ReplaceAll(opts.CommandToRun, "\"", "\\\"")
-	opts.CommandToRun = fmt.Sprintf("                command: [\"/bin/bash\", \"-c\", \"%s\"]\n%s", escapedCommand, resourcesString)
-
-	return g.populateManifestTemplate(opts)
 }
 
-// getAcceleratorConfig handles hardware-specific resource limits.
-func (g *GKEOrchestrator) getAcceleratorConfig(accelType string) (gpu, tpu, cpu, mem string) {
-	switch accelType {
+func (g *GKEOrchestrator) calculateResourceLimits(acceleratorType string) (cpu, mem, gpu, tpu string) {
+	switch acceleratorType {
 	case "nvidia-h100-mega-80gb", "nvidia-h100-80gb", "nvidia-b200":
-		return "8", "", "1", "4Gi"
+		return "1", "4Gi", "8", ""
 	case "nvidia-gb200":
-		return "4", "", "1", "4Gi"
-	case "nvidia-a100-80gb", "nvidia-tesla-a100", "nvidia-l4":
-		return "1", "", "1", "4Gi"
+		return "1", "4Gi", "4", ""
+	case "nvidia-a100-80gb", "nvidia-tesla-a100":
+		return "1", "4Gi", "1", ""
+	case "nvidia-l4":
+		return "1", "4Gi", "1", ""
 	case "tpu-v4-podslice", "tpu-v5p-slice", "tpu-v5-lite-podslice", "tpu-v5-lite-device", "tpu-v6e-slice":
-		return "", "4", "1", "4Gi"
+		return "1", "4Gi", "", "4"
 	case "":
-		return "", "", "0.5", "512Mi"
+		return "0.5", "512Mi", "", ""
 	default:
-		if strings.Contains(strings.ToLower(accelType), "nvidia") {
-			return "1", "", "1", "4Gi"
-		} else if strings.Contains(strings.ToLower(accelType), "tpu") {
-			return "", "4", "1", "4Gi"
+		if strings.Contains(strings.ToLower(acceleratorType), "nvidia") {
+			return "1", "4Gi", "1", ""
+		} else if strings.Contains(strings.ToLower(acceleratorType), "tpu") {
+			return "1", "4Gi", "", "4"
+		} else {
+			return "0.5", "512Mi", "", ""
 		}
-		return "", "", "0.5", "512Mi"
 	}
 }
 
-// populateManifestTemplate fills the JobSet template with provided options.
-func (g *GKEOrchestrator) populateManifestTemplate(opts ManifestOptions) (string, error) {
-	tmpl, err := template.New("jobSet").Parse(JobSetTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse jobset template: %w", err)
-	}
-
-	data := struct {
+func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, updatedCommand string) interface{} {
+	return struct {
 		WorkloadName            string
 		KueueQueueName          string
 		TtlSecondsAfterFinished int
@@ -705,6 +731,11 @@ func (g *GKEOrchestrator) populateManifestTemplate(opts ManifestOptions) (string
 		FullImageName           string
 		CommandToRun            string
 		AcceleratorTypeLabel    string
+		NodeSelector            string
+		Affinity                string
+		PodFailurePolicy        string
+		ImagePullSecrets        string
+		ServiceAccountName      string
 	}{
 		WorkloadName:            opts.WorkloadName,
 		KueueQueueName:          opts.KueueQueueName,
@@ -713,13 +744,251 @@ func (g *GKEOrchestrator) populateManifestTemplate(opts ManifestOptions) (string
 		NumSlices:               opts.NumSlices,
 		VmsPerSlice:             opts.VmsPerSlice,
 		FullImageName:           opts.FullImageName,
-		CommandToRun:            opts.CommandToRun,
+		CommandToRun:            updatedCommand,
 		AcceleratorTypeLabel:    g.GenerateGKENodeSelectorLabel(opts.AcceleratorType),
+		NodeSelector:            opts.NodeSelector,
+		Affinity:                opts.Affinity,
+		PodFailurePolicy:        opts.PodFailurePolicy,
+		ImagePullSecrets:        opts.ImagePullSecrets,
+		ServiceAccountName:      opts.ServiceAccountName,
+	}
+}
+
+func (g *GKEOrchestrator) indentYaml(s string, indent int) string {
+	lines := strings.Split(s, "\n")
+	padding := strings.Repeat(" ", indent)
+	var result []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			result = append(result, padding+line)
+		}
+	}
+	return strings.Join(result, "\n")
+}
+
+func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition, fullImageName string) (ManifestOptions, error) {
+	schedOpts := scheduling.SchedulingOptions{
+		PlacementPolicy:    job.PlacementPolicy,
+		NodeAffinityLabels: job.NodeSelector,
 	}
 
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute jobset template: %w", err)
+	nodeSelector := scheduling.GetNodeSelector(schedOpts)
+	accelLabel := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
+	if accelLabel != "" {
+		if nodeSelector == nil {
+			nodeSelector = make(map[string]string)
+		}
+		nodeSelector["cloud.google.com/gke-accelerator"] = accelLabel
 	}
-	return buf.String(), nil
+
+	var nodeSelectorStr string
+	if len(nodeSelector) > 0 {
+		b, err := yaml.Marshal(nodeSelector)
+		if err != nil {
+			return ManifestOptions{}, fmt.Errorf("failed to marshal nodeSelector: %w", err)
+		}
+		nodeSelectorStr = g.indentYaml(string(b), 16)
+	}
+
+	affinity := scheduling.GetAffinity(schedOpts)
+	var affinityStr string
+	if affinity != nil {
+		b, err := yaml.Marshal(affinity)
+		if err != nil {
+			return ManifestOptions{}, fmt.Errorf("failed to marshal affinity: %w", err)
+		}
+		affinityStr = g.indentYaml(string(b), 16)
+	}
+
+	podFailurePolicyStr, err := g.generatePodFailurePolicy(job.RestartOnExitCodes)
+	if err != nil {
+		return ManifestOptions{}, err
+	}
+	podFailurePolicyStr = g.indentYaml(podFailurePolicyStr, 12)
+
+	imagePullSecretsStr := g.generateImagePullSecrets(job.ImagePullSecrets)
+	if imagePullSecretsStr != "" {
+		imagePullSecretsStr = g.indentYaml(imagePullSecretsStr, 16)
+	}
+
+	return ManifestOptions{
+		WorkloadName:            job.WorkloadName,
+		FullImageName:           fullImageName,
+		CommandToRun:            job.CommandToRun,
+		AcceleratorType:         job.AcceleratorType,
+		ProjectID:               job.ProjectID,
+		ClusterName:             job.ClusterName,
+		ClusterLocation:         job.ClusterLocation,
+		KueueQueueName:          job.KueueQueueName,
+		NumSlices:               job.NumSlices,
+		VmsPerSlice:             job.VmsPerSlice,
+		MaxRestarts:             job.MaxRestarts,
+		TtlSecondsAfterFinished: job.TtlSecondsAfterFinished,
+		NodeSelector:            nodeSelectorStr,
+		Affinity:                affinityStr,
+		PodFailurePolicy:        podFailurePolicyStr,
+		ImagePullSecrets:        imagePullSecretsStr,
+		ServiceAccountName:      job.ServiceAccountName,
+	}, nil
+}
+
+func (g *GKEOrchestrator) parseJobStatus(obj map[string]interface{}) (statusStr, completionTime string) {
+	statusStr = "Unknown"
+	completionTime = ""
+
+	statusMap, ok := obj["status"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	if conditions, ok := statusMap["conditions"].([]interface{}); ok {
+		for _, c := range conditions {
+			cond := c.(map[string]interface{})
+			condType, _ := cond["type"].(string)
+			condStatus, _ := cond["status"].(string)
+			if condStatus == "True" {
+				switch condType {
+				case "Completed", "Succeeded":
+					statusStr = "Succeeded"
+				case "Failed":
+					statusStr = "Failed"
+				case "Suspended":
+					statusStr = "Suspended"
+				}
+			}
+		}
+	}
+
+	return
+}
+
+func (g *GKEOrchestrator) generatePodFailurePolicy(exitCodes []int) (string, error) {
+	if len(exitCodes) == 0 {
+		return "", nil
+	}
+
+	var validCodes []int
+	for _, code := range exitCodes {
+		if code == 0 {
+			logging.Info("Warning: Exit code 0 (success) cannot be used in PodFailurePolicy. Ignoring it.")
+			continue
+		}
+		validCodes = append(validCodes, code)
+	}
+
+	if len(validCodes) == 0 {
+		return "", nil
+	}
+
+	policy := map[string]interface{}{
+		"rules": []map[string]interface{}{
+			{
+				"action": "Ignore",
+				"onExitCodes": map[string]interface{}{
+					"operator": "In",
+					"values":   validCodes,
+				},
+			},
+		},
+	}
+	b, err := yaml.Marshal(policy)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func (g *GKEOrchestrator) generateImagePullSecrets(secrets string) string {
+	if secrets == "" {
+		return ""
+	}
+	parts := strings.Split(secrets, ",")
+	var secretList []map[string]string
+	for _, s := range parts {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			secretList = append(secretList, map[string]string{"name": s})
+		}
+	}
+	if len(secretList) == 0 {
+		return ""
+	}
+	b, _ := yaml.Marshal(secretList)
+	return string(b)
+}
+
+func (g *GKEOrchestrator) ListJobs(opts orchestrator.ListOptions) ([]orchestrator.JobStatus, error) {
+	logging.Info("Listing jobs in cluster '%s'...", opts.ClusterName)
+	if err := g.configureKubectl(opts.ClusterName, opts.ClusterLocation, opts.ProjectID); err != nil {
+		return nil, err
+	}
+
+	client, err := g.getDynamicClient()
+	if err != nil {
+		return nil, err
+	}
+
+	gvr := schema.GroupVersionResource{Group: "jobset.x-k8s.io", Version: "v1alpha2", Resource: "jobsets"}
+	list, err := client.Resource(gvr).Namespace("default").List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list jobsets: %w", err)
+	}
+
+	var jobs []orchestrator.JobStatus
+	for _, item := range list.Items {
+		name := item.GetName()
+		if opts.NameContains != "" && !strings.Contains(name, opts.NameContains) {
+			continue
+		}
+
+		creationParams := item.GetCreationTimestamp()
+		creationTime := creationParams.Time.Format(time.RFC3339)
+
+		statusStr, completionTime := g.parseJobStatus(item.Object)
+
+		if opts.Status != "" && !strings.EqualFold(statusStr, opts.Status) {
+			continue
+		}
+
+		jobs = append(jobs, orchestrator.JobStatus{
+			Name:           name,
+			Status:         statusStr,
+			CreationTime:   creationTime,
+			CompletionTime: completionTime,
+		})
+	}
+
+	return jobs, nil
+}
+
+func (g *GKEOrchestrator) DeleteJob(name string, opts orchestrator.DeleteOptions) error {
+	logging.Info("Deleting job '%s' in cluster '%s'...", name, opts.ClusterName)
+	if err := g.configureKubectl(opts.ClusterName, opts.ClusterLocation, opts.ProjectID); err != nil {
+		return err
+	}
+
+	client, err := g.getDynamicClient()
+	if err != nil {
+		return err
+	}
+
+	gvr := schema.GroupVersionResource{Group: "jobset.x-k8s.io", Version: "v1alpha2", Resource: "jobsets"}
+	err = client.Resource(gvr).Namespace("default").Delete(context.TODO(), name, metav1.DeleteOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to delete jobset %s: %w", name, err)
+	}
+
+	logging.Info("Job '%s' deleted successfully.", name)
+	return nil
+}
+
+func (g *GKEOrchestrator) getDynamicClient() (dynamic.Interface, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	configOverrides := &clientcmd.ConfigOverrides{}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	config, err := kubeConfig.ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubeconfig: %w", err)
+	}
+	return dynamic.NewForConfig(config)
 }

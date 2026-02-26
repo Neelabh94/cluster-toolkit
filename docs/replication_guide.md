@@ -132,7 +132,7 @@ Here are the flags currently supported by `gcluster run`:
 * `-a, --accelerator-type string`: Type of accelerator to request (e.g., `'nvidia-h100-mega-80gb'`). If empty, `gcluster run` will auto-discover the optimal accelerator available on the cluster nodes. (Optional)
 * `-o, --output-manifest string`: Path to output the generated Kubernetes manifest instead of applying it directly to the cluster. Useful for inspection.
 * `--cluster-name string`: Name of the GKE cluster to deploy the workload to. (Required)
-* `--cluster-location string`: Location (region) of the GKE cluster. (Required)
+* `--cluster-region string`: Region of the GKE cluster. (Required)
 * `-p, --project string`: Google Cloud Project ID. If not provided, it will be inferred from your `gcloud` configuration.
 * `-f, --platform string`: Target platform for the Docker image build (e.g., `'linux/amd64'`, `'linux/arm64'`). Used with `--base-docker-image`. (Default: `linux/amd64`)
 * `-w, --workload-name string`: Name of the workload (JobSet) to create. This name will be used for Kubernetes resources. (Required)
@@ -156,7 +156,7 @@ Because `gcluster run` features auto-discovery, you can use the exact same comma
     ./gcluster run \
       --project <YOUR_GCP_PROJECT_ID> \
       --cluster-name my-test-cluster \
-      --cluster-location us-central1 \
+      --cluster-region us-central1 \
       --base-docker-image python:3.9-slim \
       --build-context job_details \
       --command "python app.py" \
@@ -205,6 +205,128 @@ Verify that the Kubernetes JobSet ran successfully on your GKE cluster.
     Hello from the gcluster run application!
     This is a sample application running on GKE.
     ```
+
+## 8. Verify Phase 2 Features (Advanced Scheduling & Lifecycle)
+
+Phase 2 introduces job lifecycle management (`workload list`, `workload delete`) and advanced scheduling flags.
+
+### 8.1 List Workloads
+
+You can now list the status of workloads directly through `gcluster`.
+
+```bash
+./gcluster workload list \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-region us-central1
+```
+
+You should see a table output with `NAME`, `STATUS`, `CREATION_TIME`, and `COMPLETION_TIME`.
+
+### 8.2 Run with Advanced Scheduling Flags
+
+### 8.3 Run with Advanced Scheduling Flags
+
+Try running a job with advanced scheduling options.
+
+**Example 1: Target Specific Nodes (Machine Label)**
+Use `--machine-label` to target specific hardware (e.g., C2 nodes).
+
+```bash
+./gcluster run \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-region us-central1 \
+  --base-docker-image python:3.9-slim \
+  --build-context job_details \
+  --command "python app.py" \
+  --workload-name my-machine-job \
+  --machine-label "node.kubernetes.io/instance-type=c2-standard-60"
+```
+
+**Example 2: Use Placement Policy**
+Use `--placement-policy` to specify a GKE Placement Policy (e.g., for compact placement to reduce latency).
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-compact-job \
+  --placement-policy "compact-placement"
+```
+
+*(Note: requires a `PlacementPolicy` resource named `compact-placement` to exist on the cluster)*
+
+**Example 3: Pod Failure Policy**
+Use `--restart-on-exit-codes` to ignore specific exit codes (e.g., treating exit code 1 as success or retriable non-failure).
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-robust-job \
+  --restart-on-exit-codes 0,1,137
+```
+
+(Note: Exit code 0 is always ignored by default)
+
+**Example 4: Private Registry & Service Account**
+Use `--image-pull-secret` and `--service-account` for secure workloads.
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-secure-job \
+  --image-pull-secret "my-private-registry-secret" \
+  --service-account "my-workload-sa"
+```
+
+### 8.4 Delete Workloads
+
+You can clean up specific workloads without destroying the entire cluster.
+
+```bash
+./gcluster workload delete my-python-app-job \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-region us-central1
+```
+
+Verify it's gone by running `gcluster workload list` again.
+
+### 8.5 Job Retention (TTL)
+
+By default, finished jobs are kept for 1 hour (3600 seconds). You can change this using `--ttl-seconds-after-finished`.
+
+```bash
+./gcluster run ... --ttl-seconds-after-finished 600 # Keep for only 10 minutes
+```
+
+### 8.6 Topology & Scheduler
+
+**Example 1: Topology Awareness**
+Request a specific TPU slice topology using `--topology`.
+
+```bash
+./gcluster run \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-region us-central1 \
+  --workload-name my-topology-job \
+  --base-docker-image python:3.9-slim \
+  --build-context job_details \
+  --command "python app.py" \
+  --accelerator-type tpu-v6e-slice \
+  --topology 4x4
+```
+
+**Example 2: Scheduler Selection**
+Use a specific scheduler (e.g., `gke.io/topology-aware-auto`) using `--scheduler`.
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-scheduler-job \
+  --scheduler gke.io/topology-aware-auto
+```
 
 ## 9. Cleanup
 

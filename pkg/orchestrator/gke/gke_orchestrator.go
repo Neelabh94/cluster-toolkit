@@ -674,7 +674,6 @@ func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, err
 	escapedCommand := strings.ReplaceAll(opts.CommandToRun, "\"", "\\\"")
 	updatedCommand := fmt.Sprintf("                command: [\"/bin/bash\", \"-c\", \"%s\"]\n%s", escapedCommand, resourcesString)
 
-	// 5. Execute Template
 	tmpl, err := template.New("jobSet").Parse(JobSetTemplate)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse jobset template: %w", err)
@@ -797,35 +796,14 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		Scheduler:          job.Scheduler,
 	}
 
-	nodeSelector := scheduling.GetNodeSelector(schedOpts)
-	accelLabel := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
-	if accelLabel != "" {
-		if nodeSelector == nil {
-			nodeSelector = make(map[string]string)
-		}
-		if strings.Contains(accelLabel, "tpu-v6e") {
-			nodeSelector["cloud.google.com/gke-tpu-accelerator"] = accelLabel
-		} else {
-			nodeSelector["cloud.google.com/gke-accelerator"] = accelLabel
-		}
+	nodeSelectorStr, err := g.buildNodeSelector(schedOpts, job)
+	if err != nil {
+		return ManifestOptions{}, err
 	}
 
-	var nodeSelectorStr string
-	if len(nodeSelector) > 0 {
-		b, err := yaml.Marshal(nodeSelector)
-		if err != nil {
-			return ManifestOptions{}, fmt.Errorf("failed to marshal nodeSelector: %w", err)
-		}
-		nodeSelectorStr = g.indentYaml(string(b), 16)
-	}
-
-	var affinityStr string
-	if affinity := scheduling.GetAffinity(schedOpts); affinity != nil {
-		b, err := k8syaml.Marshal(affinity)
-		if err != nil {
-			return ManifestOptions{}, fmt.Errorf("failed to marshal affinity: %w", err)
-		}
-		affinityStr = g.indentYaml(string(b), 16)
+	affinityStr, err := g.buildAffinity(schedOpts)
+	if err != nil {
+		return ManifestOptions{}, err
 	}
 
 	podFailurePolicyStr, err := g.generatePodFailurePolicy(job.RestartOnExitCodes)
@@ -839,15 +817,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		imagePullSecretsStr = g.indentYaml(imagePullSecretsStr, 16)
 	}
 
-	topologyAnnotation := scheduling.GetTopologyAnnotation(job.Topology)
-	var topologyAnnotationStr string
-	if len(topologyAnnotation) > 0 {
-		b, err := k8syaml.Marshal(topologyAnnotation)
-		if err != nil {
-			return ManifestOptions{}, fmt.Errorf("failed to marshal topology annotation: %w", err)
-		}
-		topologyAnnotationStr = g.indentYaml(string(b), 16)
-	}
+	topologyAnnotationStr := g.buildTopologyAnnotation(job.Topology)
 
 	tolerations := scheduling.GetTolerations(job.AcceleratorType)
 	var tolerationsStr string
@@ -1042,4 +1012,49 @@ func (g *GKEOrchestrator) getDynamicClient() (dynamic.Interface, error) {
 		return nil, fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
 	return dynamic.NewForConfig(config)
+}
+func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptions, job orchestrator.JobDefinition) (string, error) {
+	nodeSelector := scheduling.GetNodeSelector(schedOpts)
+	accelLabel := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
+	if accelLabel != "" {
+		if nodeSelector == nil {
+			nodeSelector = make(map[string]string)
+		}
+		if strings.Contains(accelLabel, "tpu-v6e") {
+			nodeSelector["cloud.google.com/gke-tpu-accelerator"] = accelLabel
+		} else {
+			nodeSelector["cloud.google.com/gke-accelerator"] = accelLabel
+		}
+	}
+
+	if len(nodeSelector) > 0 {
+		b, err := yaml.Marshal(nodeSelector)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal nodeSelector: %w", err)
+		}
+		return g.indentYaml(string(b), 16), nil
+	}
+	return "", nil
+}
+
+func (g *GKEOrchestrator) buildAffinity(schedOpts scheduling.SchedulingOptions) (string, error) {
+	if affinity := scheduling.GetAffinity(schedOpts); affinity != nil {
+		b, err := k8syaml.Marshal(affinity)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal affinity: %w", err)
+		}
+		return g.indentYaml(string(b), 16), nil
+	}
+	return "", nil
+}
+
+func (g *GKEOrchestrator) buildTopologyAnnotation(topology string) string {
+	topologyAnnotation := scheduling.GetTopologyAnnotation(topology)
+	if len(topologyAnnotation) > 0 {
+		b, err := yaml.Marshal(topologyAnnotation)
+		if err == nil {
+			return g.indentYaml(string(b), 16)
+		}
+	}
+	return ""
 }

@@ -132,7 +132,7 @@ Here are the flags currently supported by `gcluster run`:
 * `-a, --accelerator-type string`: Type of accelerator to request (e.g., `'nvidia-h100-mega-80gb'`). If empty, `gcluster run` will auto-discover the optimal accelerator available on the cluster nodes. (Optional)
 * `-o, --output-manifest string`: Path to output the generated Kubernetes manifest instead of applying it directly to the cluster. Useful for inspection.
 * `--cluster-name string`: Name of the GKE cluster to deploy the workload to. (Required)
-* `--cluster-location string`: Location (region) of the GKE cluster. (Required)
+* `--cluster-region string`: Region of the GKE cluster. (Required)
 * `-p, --project string`: Google Cloud Project ID. If not provided, it will be inferred from your `gcloud` configuration.
 * `-f, --platform string`: Target platform for the Docker image build (e.g., `'linux/amd64'`, `'linux/arm64'`). Used with `--base-docker-image`. (Default: `linux/amd64`)
 * `-w, --workload-name string`: Name of the workload (JobSet) to create. This name will be used for Kubernetes resources. (Required)
@@ -156,7 +156,7 @@ Because `gcluster run` features auto-discovery, you can use the exact same comma
     ./gcluster run \
       --project <YOUR_GCP_PROJECT_ID> \
       --cluster-name my-test-cluster \
-      --cluster-location us-central1 \
+      --cluster-region us-central1 \
       --base-docker-image python:3.9-slim \
       --build-context job_details \
       --command "python app.py" \
@@ -208,17 +208,17 @@ Verify that the Kubernetes JobSet ran successfully on your GKE cluster.
 
 ## 8. Verify Phase 2 Features (Advanced Scheduling & Lifecycle)
 
-Phase 2 introduces job lifecycle management (`list`, `delete`) and advanced scheduling flags.
+Phase 2 introduces job lifecycle management (`workload list`, `workload delete`) and advanced scheduling flags.
 
-### 8.1 List Jobs
+### 8.1 List Workloads
 
-You can now list the status of jobs directly through `gcluster`.
+You can now list the status of workloads directly through `gcluster`.
 
 ```bash
-./gcluster list jobs \
+./gcluster workload list \
   --project <YOUR_GCP_PROJECT_ID> \
   --cluster-name my-test-cluster \
-  --cluster-location us-central1
+  --cluster-region us-central1
 ```
 
 You should see a table output with `NAME`, `STATUS`, `CREATION_TIME`, and `COMPLETION_TIME`.
@@ -236,7 +236,7 @@ Use `--machine-label` to target specific hardware (e.g., C2 nodes).
 ./gcluster run \
   --project <YOUR_GCP_PROJECT_ID> \
   --cluster-name my-test-cluster \
-  --cluster-location us-central1 \
+  --cluster-region us-central1 \
   --base-docker-image python:3.9-slim \
   --build-context job_details \
   --command "python app.py" \
@@ -279,18 +279,18 @@ Use `--image-pull-secret` and `--service-account` for secure workloads.
   --service-account "my-workload-sa"
 ```
 
-### 8.4 Delete Jobs
+### 8.4 Delete Workloads
 
-You can clean up specific jobs without destroying the entire cluster.
+You can clean up specific workloads without destroying the entire cluster.
 
 ```bash
-./gcluster delete job my-python-app-job \
+./gcluster workload delete my-python-app-job \
   --project <YOUR_GCP_PROJECT_ID> \
   --cluster-name my-test-cluster \
-  --cluster-location us-central1
+  --cluster-region us-central1
 ```
 
-Verify it's gone by running `gcluster list jobs` again.
+Verify it's gone by running `gcluster workload list` again.
 
 ### 8.5 Job Retention (TTL)
 
@@ -298,6 +298,34 @@ By default, finished jobs are kept for 1 hour (3600 seconds). You can change thi
 
 ```bash
 ./gcluster run ... --ttl-seconds-after-finished 600 # Keep for only 10 minutes
+```
+
+### 8.6 Topology & Scheduler
+
+**Example 1: Topology Awareness**
+Request a specific TPU slice topology using `--topology`.
+
+```bash
+./gcluster run \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster-name my-test-cluster \
+  --cluster-region us-central1 \
+  --workload-name my-topology-job \
+  --base-docker-image python:3.9-slim \
+  --build-context job_details \
+  --command "python app.py" \
+  --accelerator-type tpu-v6e-slice \
+  --topology 4x4
+```
+
+**Example 2: Scheduler Selection**
+Use a specific scheduler (e.g., `gke.io/topology-aware-auto`) using `--scheduler`.
+
+```bash
+./gcluster run \
+  ... \
+  --workload-name my-scheduler-job \
+  --scheduler gke.io/topology-aware-auto
 ```
 
 ## 9. Cleanup

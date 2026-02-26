@@ -23,31 +23,25 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(deleteCmd)
-	deleteCmd.AddCommand(deleteJobCmd)
+	workloadCmd.AddCommand(deleteWorkloadCmd)
 
-	deleteJobCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster. Required.")
-	deleteJobCmd.Flags().StringVar(&clusterLocation, "cluster-location", "", "Location (zone or region) of the GKE cluster. Required.")
-	deleteJobCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
+	deleteWorkloadCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster. Required.")
+	deleteWorkloadCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	deleteWorkloadCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
 
-	_ = deleteJobCmd.MarkFlagRequired("cluster-name")
-	_ = deleteJobCmd.MarkFlagRequired("cluster-location")
+	_ = deleteWorkloadCmd.MarkFlagRequired("cluster-name")
+	_ = deleteWorkloadCmd.MarkFlagRequired("cluster-region")
 }
 
-var deleteCmd = &cobra.Command{
-	Use:   "delete",
-	Short: "Delete resources (jobs).",
-}
-
-var deleteJobCmd = &cobra.Command{
-	Use:   "job [job-name]",
-	Short: "Delete a job from the cluster.",
-	Args:  cobra.ExactArgs(1),
-	Run:   runDeleteJob,
+var deleteWorkloadCmd = &cobra.Command{
+	Use:          "delete [workload-name]",
+	Short:        "Delete a workload from the cluster.",
+	Args:         cobra.ExactArgs(1),
+	Run:          runDeleteWorkload,
 	SilenceUsage: true,
 }
 
-func runDeleteJob(cmd *cobra.Command, args []string) {
+func runDeleteWorkload(cmd *cobra.Command, args []string) {
 	jobName := args[0]
 	logging.Info("Deleting job %s...", jobName)
 

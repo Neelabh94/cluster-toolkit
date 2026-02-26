@@ -31,36 +31,30 @@ var (
 	filterName   string
 )
 
-func init() {
-	rootCmd.AddCommand(listCmd)
-	listCmd.AddCommand(listJobsCmd)
-
-	listJobsCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster. Required.")
-	listJobsCmd.Flags().StringVar(&clusterLocation, "cluster-location", "", "Location (zone or region) of the GKE cluster. Required.")
-	listJobsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
-
-	listJobsCmd.Flags().StringVar(&filterStatus, "status", "", "Filter jobs by status (e.g. Running, Failed, Succeeded).")
-	listJobsCmd.Flags().StringVar(&filterName, "name-contains", "", "Filter jobs by name.")
-	
-	_ = listJobsCmd.MarkFlagRequired("cluster-name")
-	_ = listJobsCmd.MarkFlagRequired("cluster-location")
-}
-
-var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List resources (jobs).",
-}
-
-var listJobsCmd = &cobra.Command{
-	Use:   "jobs",
-	Short: "List jobs in the cluster.",
-	Run:   runListJobs,
+var listWorkloadsCmd = &cobra.Command{
+	Use:          "list",
+	Short:        "List workloads (jobs) in the cluster.",
+	Run:          runListWorkloads,
 	SilenceUsage: true,
 }
 
-func runListJobs(cmd *cobra.Command, args []string) {
+func init() {
+	workloadCmd.AddCommand(listWorkloadsCmd)
+
+	listWorkloadsCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster. Required.")
+	listWorkloadsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	listWorkloadsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
+
+	listWorkloadsCmd.Flags().StringVar(&filterStatus, "status", "", "Filter jobs by status (e.g. Running, Failed, Succeeded).")
+	listWorkloadsCmd.Flags().StringVar(&filterName, "name-contains", "", "Filter jobs by name.")
+
+	_ = listWorkloadsCmd.MarkFlagRequired("cluster-name")
+	_ = listWorkloadsCmd.MarkFlagRequired("cluster-region")
+}
+
+func runListWorkloads(cmd *cobra.Command, args []string) {
 	logging.Info("Listing jobs...")
-	
+
 	orc, err := gke.NewGKEOrchestrator()
 	if err != nil {
 		logging.Fatal("Failed to create orchestrator: %v", err)

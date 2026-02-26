@@ -47,6 +47,8 @@ var (
 	restartOnExitCodes []int
 	imagePullSecrets   string
 	serviceAccountName string
+	topology           string
+	scheduler          string
 	platform           string
 )
 
@@ -60,7 +62,7 @@ func init() {
 	runCmd.Flags().StringVarP(&acceleratorType, "accelerator-type", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
 	runCmd.Flags().StringVarP(&outputManifest, "output-manifest", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
 	runCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster to deploy the workload to. Required.")
-	runCmd.Flags().StringVar(&clusterLocation, "cluster-location", "", "Location (zone or region) of the GKE cluster. Required.")
+	runCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
 	runCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
 	runCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the Docker image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-docker-image.")
 
@@ -77,11 +79,12 @@ func init() {
 	runCmd.Flags().IntSliceVar(&restartOnExitCodes, "restart-on-exit-codes", nil, "List of exit codes that should not trigger a job failure.")
 	runCmd.Flags().StringVar(&imagePullSecrets, "image-pull-secret", "", "Comma-separated list of secrets for pulling images.")
 	runCmd.Flags().StringVar(&serviceAccountName, "service-account", "", "Service account name for the pods.")
+	runCmd.Flags().StringVar(&topology, "topology", "", "TPU slice topology (e.g., 2x2x1).")
+	runCmd.Flags().StringVar(&scheduler, "scheduler", "", "Kubernetes Scheduler name (e.g., gke.io/topology-aware-auto).")
 
 	_ = runCmd.MarkFlagRequired("command")
 	_ = runCmd.MarkFlagRequired("cluster-name")
-	_ = runCmd.MarkFlagRequired("cluster-location")
-	// Mutually exclusive flags and conditional requirements will be validated in runRunCmd
+	_ = runCmd.MarkFlagRequired("cluster-region")
 }
 
 var runCmd = &cobra.Command{
@@ -130,12 +133,14 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 		VmsPerSlice:             vmsPerSlice,
 		MaxRestarts:             maxRestarts,
 		TtlSecondsAfterFinished: ttlSecondsAfterFinished,
-		PlacementPolicy:    placementPolicy,
-		NodeSelector:       nodeSelector,
-		Affinity:           map[string]string{"cpu-affinity": cpuAffinityStr},
-		RestartOnExitCodes: restartOnExitCodes,
-		ImagePullSecrets:   imagePullSecrets,
-		ServiceAccountName: serviceAccountName,
+		PlacementPolicy:         placementPolicy,
+		NodeSelector:            nodeSelector,
+		Affinity:                map[string]string{"cpu-affinity": cpuAffinityStr},
+		RestartOnExitCodes:      restartOnExitCodes,
+		ImagePullSecrets:        imagePullSecrets,
+		ServiceAccountName:      serviceAccountName,
+		Topology:                topology,
+		Scheduler:               scheduler,
 	}
 
 	gkeOrchestrator, err := gke.NewGKEOrchestrator()

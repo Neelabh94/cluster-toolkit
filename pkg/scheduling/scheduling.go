@@ -18,36 +18,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// SchedulingOptions holds the options for generating scheduling constraints.
 type SchedulingOptions struct {
-	// PlacementPolicy is the name of the GKE Placement Policy to use.
-	PlacementPolicy string
-	// CPUAffinity specifies whether to use CPU affinity.
-	// This could be simpler (bool) or more complex depending on requirements.
-	// For now, let's assume it's a map of labels or a specific type.
-	// If it's just "define CPU affinity rules", we might need more details.
-	// But let's start with a generic map for now, or just NodeAffinity.
-	// The request mentioned "--cpu-affinity: To define CPU affinity rules."
-	// Maybe it's a boolean or a specific mode.
-	// Let's assume it's a boolean flag for now that enables "compact" placement if possible,
-	// or specific CPU pinning. But given CLI flag, let's stick to node affinity for now?
-	// The user request said: "Implement functions ... GetAffinity ... generate the appropriate affinity sections".
-	
-	// Setup for explicit Node Affinity
+	PlacementPolicy    string
+	Topology           string
+	Scheduler          string
 	NodeAffinityLabels map[string]string
 }
 
-// GetNodeSelector returns a map of labels for node selection.
-// It combines the accelerator type label, placement policy, and user-provided machine labels.
 func GetNodeSelector(opts SchedulingOptions) map[string]string {
 	nodeSelector := make(map[string]string)
-
-	// Add accelerator label if present in options (we assumed opts had it, let's add it to struct or pass it)
-	// We need to update SchedulingOptions to include AcceleratorTypeLabel if we want it here.
-	// For now, let's assume we merge the output of this with accelerator label in the orchestrator,
-	// OR we add it to machineLabels.
-	// But let's check `SchedulingOptions` definition - it doesn't have it.
-	// We should just use what is in `machineLabels` and `PlacementPolicy`.
 
 	if opts.PlacementPolicy != "" {
 		nodeSelector["cloud.google.com/gke-placement-group"] = opts.PlacementPolicy
@@ -63,13 +42,60 @@ func GetNodeSelector(opts SchedulingOptions) map[string]string {
 	return nodeSelector
 }
 
-// GetAffinity returns the affinity configuration for the pod.
-// Currently it maps generic affinity rules if needed.
 func GetAffinity(opts SchedulingOptions) *corev1.Affinity {
-	// If PlacementPolicy is used, we primarily use NodeSelector (handled above).
-	// But sometimes users want PodAffinity or AntiAffinity.
-	// If `CPUAffinity` implies specific NUMA topology or similar, we might add it here.
-	
-	// For now, if we have no custom affinity rules beyond node selectors, return nil.
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "cloud.google.com/gke-nodepool",
+								Operator: corev1.NodeSelectorOpNotIn,
+								Values:   []string{"default-pool"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func GetTopologyAnnotation(topology string) map[string]string {
+	if topology == "" {
+		return nil
+	}
+	return map[string]string{
+		"cloud.google.com/gke-tpu-slice-topology": topology,
+	}
+}
+
+func GetTolerations(acceleratorType string) []corev1.Toleration {
+	if acceleratorType == "" {
+		return nil
+	}
+	if isTPU(acceleratorType) {
+		return []corev1.Toleration{
+			{
+				Key:      "google.com/tpu",
+				Operator: corev1.TolerationOpExists,
+				Effect:   corev1.TaintEffectNoSchedule,
+			},
+		}
+	}
 	return nil
+}
+
+func isTPU(acceleratorType string) bool {
+	return len(acceleratorType) > 3 && (acceleratorType[:3] == "tpu" || contains(acceleratorType, "tpu"))
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i < len(s)-len(substr)+1; i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

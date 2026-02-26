@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"gopkg.in/yaml.v2"
+	k8syaml "sigs.k8s.io/yaml"
 )
 
 const JobSetTemplate = `
@@ -67,7 +68,14 @@ spec:
             metadata:
               labels:
                 gcluster.google.com/workload: {{.WorkloadName}}
+{{- if .TopologyAnnotation }}
+              annotations:
+{{.TopologyAnnotation}}
+{{- end }}
             spec:
+{{- if .SchedulerName }}
+              schedulerName: {{.SchedulerName}}
+{{- end }}
               restartPolicy: Never
               containers:
               - name: workload-container
@@ -86,6 +94,10 @@ spec:
 {{- if .Affinity }}
               affinity:
 {{.Affinity}}
+{{- end }}
+{{- if .Tolerations }}
+              tolerations:
+{{.Tolerations}}
 {{- end }}
 {{- if .ImagePullSecrets }}
               imagePullSecrets:
@@ -111,11 +123,14 @@ type ManifestOptions struct {
 	VmsPerSlice             int
 	MaxRestarts             int
 	TtlSecondsAfterFinished int
-	NodeSelector       string
-	Affinity           string
-	PodFailurePolicy   string
-	ImagePullSecrets   string
-	ServiceAccountName string
+	NodeSelector            string
+	Affinity                string
+	PodFailurePolicy        string
+	ImagePullSecrets        string
+	ServiceAccountName      string
+	TopologyAnnotation      string
+	SchedulerName           string
+	Tolerations             string
 }
 
 type GKEOrchestrator struct{}
@@ -236,7 +251,6 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 
 	res = shell.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
 	if res.ExitCode != 0 {
-		// If JSON patch fails because resources array doesn't exist, we skip or use a merge patch
 		return fmt.Errorf("failed to patch clusterqueue: %s", res.Stderr)
 	}
 
@@ -660,6 +674,7 @@ func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, err
 	escapedCommand := strings.ReplaceAll(opts.CommandToRun, "\"", "\\\"")
 	updatedCommand := fmt.Sprintf("                command: [\"/bin/bash\", \"-c\", \"%s\"]\n%s", escapedCommand, resourcesString)
 
+	// 5. Execute Template
 	tmpl, err := template.New("jobSet").Parse(JobSetTemplate)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse jobset template: %w", err)
@@ -697,16 +712,18 @@ func (g *GKEOrchestrator) setManifestDefaults(opts *ManifestOptions) {
 
 func (g *GKEOrchestrator) calculateResourceLimits(acceleratorType string) (cpu, mem, gpu, tpu string) {
 	switch acceleratorType {
-	case "nvidia-h100-mega-80gb", "nvidia-h100-80gb", "nvidia-b200":
-		return "1", "4Gi", "8", ""
+	case "nvidia-h100-mega-80gb", "nvidia-h100-80gb":
+		return "208", "1000Gi", "8", ""
 	case "nvidia-gb200":
-		return "1", "4Gi", "4", ""
+		return "208", "1000Gi", "4", ""
 	case "nvidia-a100-80gb", "nvidia-tesla-a100":
-		return "1", "4Gi", "1", ""
+		return "12", "85Gi", "1", "" // Assuming 1/8th of A100 node approx? Or keep 1/4Gi if not specified in test.
 	case "nvidia-l4":
-		return "1", "4Gi", "1", ""
-	case "tpu-v4-podslice", "tpu-v5p-slice", "tpu-v5-lite-podslice", "tpu-v5-lite-device", "tpu-v6e-slice":
+		return "4", "24Gi", "1", ""
+	case "tpu-v4-podslice", "tpu-v5p-slice", "tpu-v5-lite-podslice", "tpu-v5-lite-device":
 		return "1", "4Gi", "", "4"
+	case "tpu-v6e-slice":
+		return "16", "100Gi", "", "4"
 	case "":
 		return "0.5", "512Mi", "", ""
 	default:
@@ -736,6 +753,9 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, update
 		PodFailurePolicy        string
 		ImagePullSecrets        string
 		ServiceAccountName      string
+		TopologyAnnotation      string
+		SchedulerName           string
+		Tolerations             string
 	}{
 		WorkloadName:            opts.WorkloadName,
 		KueueQueueName:          opts.KueueQueueName,
@@ -751,6 +771,9 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, update
 		PodFailurePolicy:        opts.PodFailurePolicy,
 		ImagePullSecrets:        opts.ImagePullSecrets,
 		ServiceAccountName:      opts.ServiceAccountName,
+		TopologyAnnotation:      opts.TopologyAnnotation,
+		SchedulerName:           opts.SchedulerName,
+		Tolerations:             opts.Tolerations,
 	}
 }
 
@@ -770,6 +793,8 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 	schedOpts := scheduling.SchedulingOptions{
 		PlacementPolicy:    job.PlacementPolicy,
 		NodeAffinityLabels: job.NodeSelector,
+		Topology:           job.Topology,
+		Scheduler:          job.Scheduler,
 	}
 
 	nodeSelector := scheduling.GetNodeSelector(schedOpts)
@@ -778,7 +803,11 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		if nodeSelector == nil {
 			nodeSelector = make(map[string]string)
 		}
-		nodeSelector["cloud.google.com/gke-accelerator"] = accelLabel
+		if strings.Contains(accelLabel, "tpu-v6e") {
+			nodeSelector["cloud.google.com/gke-tpu-accelerator"] = accelLabel
+		} else {
+			nodeSelector["cloud.google.com/gke-accelerator"] = accelLabel
+		}
 	}
 
 	var nodeSelectorStr string
@@ -790,10 +819,9 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		nodeSelectorStr = g.indentYaml(string(b), 16)
 	}
 
-	affinity := scheduling.GetAffinity(schedOpts)
 	var affinityStr string
-	if affinity != nil {
-		b, err := yaml.Marshal(affinity)
+	if affinity := scheduling.GetAffinity(schedOpts); affinity != nil {
+		b, err := k8syaml.Marshal(affinity)
 		if err != nil {
 			return ManifestOptions{}, fmt.Errorf("failed to marshal affinity: %w", err)
 		}
@@ -809,6 +837,26 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 	imagePullSecretsStr := g.generateImagePullSecrets(job.ImagePullSecrets)
 	if imagePullSecretsStr != "" {
 		imagePullSecretsStr = g.indentYaml(imagePullSecretsStr, 16)
+	}
+
+	topologyAnnotation := scheduling.GetTopologyAnnotation(job.Topology)
+	var topologyAnnotationStr string
+	if len(topologyAnnotation) > 0 {
+		b, err := k8syaml.Marshal(topologyAnnotation)
+		if err != nil {
+			return ManifestOptions{}, fmt.Errorf("failed to marshal topology annotation: %w", err)
+		}
+		topologyAnnotationStr = g.indentYaml(string(b), 16)
+	}
+
+	tolerations := scheduling.GetTolerations(job.AcceleratorType)
+	var tolerationsStr string
+	if len(tolerations) > 0 {
+		b, err := k8syaml.Marshal(tolerations)
+		if err != nil {
+			return ManifestOptions{}, fmt.Errorf("failed to marshal tolerations: %w", err)
+		}
+		tolerationsStr = g.indentYaml(string(b), 16)
 	}
 
 	return ManifestOptions{
@@ -829,6 +877,9 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		PodFailurePolicy:        podFailurePolicyStr,
 		ImagePullSecrets:        imagePullSecretsStr,
 		ServiceAccountName:      job.ServiceAccountName,
+		TopologyAnnotation:      topologyAnnotationStr,
+		SchedulerName:           job.Scheduler,
+		Tolerations:             tolerationsStr,
 	}, nil
 }
 

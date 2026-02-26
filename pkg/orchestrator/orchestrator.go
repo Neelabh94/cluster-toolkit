@@ -14,9 +14,6 @@
 
 package orchestrator
 
-// JobDefinition holds all the necessary parameters to define a job.
-// This struct is intended to be general enough to support various orchestrators,
-// with specific orchestrator implementations extracting the fields relevant to them.
 type JobDefinition struct {
 	DockerImage     string
 	BaseDockerImage string
@@ -29,17 +26,49 @@ type JobDefinition struct {
 	ClusterName     string
 	ClusterLocation string
 
-	// JobSet and Kueue related options
 	WorkloadName            string
 	KueueQueueName          string
 	NumSlices               int
 	VmsPerSlice             int
 	MaxRestarts             int
 	TtlSecondsAfterFinished int
+
+	PlacementPolicy    string
+	NodeSelector       map[string]string
+	Affinity           map[string]string
+	PodFailurePolicy   map[string]interface{}
+	RestartOnExitCodes []int
+
+	ImagePullSecrets   string
+	ServiceAccountName string
+	Topology           string
+	Scheduler          string
 }
 
-// Orchestrator defines the interface for submitting and managing jobs on a cluster.
+type JobStatus struct {
+	Name           string
+	Status         string
+	CreationTime   string
+	CompletionTime string
+}
+
+type ListOptions struct {
+	ProjectID       string
+	ClusterName     string
+	ClusterLocation string
+	// Filters
+	Status       string
+	NameContains string
+}
+
+type DeleteOptions struct {
+	ProjectID       string
+	ClusterName     string
+	ClusterLocation string
+}
+
 type Orchestrator interface {
-	// SubmitJob takes a JobDefinition and orchestrates its deployment.
 	SubmitJob(job JobDefinition) error
+	ListJobs(opts ListOptions) ([]JobStatus, error)
+	DeleteJob(name string, opts DeleteOptions) error
 }

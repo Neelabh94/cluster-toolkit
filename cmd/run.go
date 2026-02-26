@@ -33,14 +33,23 @@ var (
 	clusterLocation string
 	projectID       string
 
-	// JobSet and Kueue related options
 	workloadName            string
 	kueueQueueName          string
 	numSlices               int
 	vmsPerSlice             int
 	maxRestarts             int
 	ttlSecondsAfterFinished int
-	platform                string // Added for platform flag
+
+	placementPolicy string
+	nodeSelector    map[string]string
+
+	cpuAffinityStr     string
+	restartOnExitCodes []int
+	imagePullSecrets   string
+	serviceAccountName string
+	topology           string
+	scheduler          string
+	platform           string
 )
 
 func init() {
@@ -53,11 +62,10 @@ func init() {
 	runCmd.Flags().StringVarP(&acceleratorType, "accelerator-type", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
 	runCmd.Flags().StringVarP(&outputManifest, "output-manifest", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
 	runCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster to deploy the workload to. Required.")
-	runCmd.Flags().StringVar(&clusterLocation, "cluster-location", "", "Location (zone or region) of the GKE cluster. Required.")
+	runCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
 	runCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
 	runCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the Docker image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-docker-image.")
 
-	// JobSet and Kueue flags
 	runCmd.Flags().StringVarP(&workloadName, "workload-name", "w", "", "Name of the workload (JobSet) to create. Required.")
 	runCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "", "Name of the Kueue LocalQueue to submit the workload to. If empty, it will be auto-discovered.")
 	runCmd.Flags().IntVar(&numSlices, "num-slices", 1, "Number of JobSet replicas (slices).")
@@ -65,13 +73,18 @@ func init() {
 	runCmd.Flags().IntVar(&maxRestarts, "max-restarts", 1, "Maximum number of restarts for the JobSet before failing.")
 	runCmd.Flags().IntVar(&ttlSecondsAfterFinished, "ttl-seconds-after-finished", 3600, "Time (in seconds) to retain the JobSet after it finishes.")
 
-	// Mark required flags
+	runCmd.Flags().StringVar(&placementPolicy, "placement-policy", "", "Name of the GKE placement policy to use.")
+	runCmd.Flags().StringToStringVar(&nodeSelector, "machine-label", nil, "Key=value pairs for node labels to target specific machine types.")
+	runCmd.Flags().StringVar(&cpuAffinityStr, "cpu-affinity", "", "CPU affinity rules (e.g., 'numa').")
+	runCmd.Flags().IntSliceVar(&restartOnExitCodes, "restart-on-exit-codes", nil, "List of exit codes that should not trigger a job failure.")
+	runCmd.Flags().StringVar(&imagePullSecrets, "image-pull-secret", "", "Comma-separated list of secrets for pulling images.")
+	runCmd.Flags().StringVar(&serviceAccountName, "service-account", "", "Service account name for the pods.")
+	runCmd.Flags().StringVar(&topology, "topology", "", "TPU slice topology (e.g., 2x2x1).")
+	runCmd.Flags().StringVar(&scheduler, "scheduler", "", "Kubernetes Scheduler name (e.g., gke.io/topology-aware-auto).")
+
 	_ = runCmd.MarkFlagRequired("command")
 	_ = runCmd.MarkFlagRequired("cluster-name")
-	_ = runCmd.MarkFlagRequired("cluster-location")
-	_ = runCmd.MarkFlagRequired("workload-name") // Mark new workload-name as required
-
-	// Mutually exclusive flags and conditional requirements will be validated in runRunCmd
+	_ = runCmd.MarkFlagRequired("cluster-region")
 }
 
 var runCmd = &cobra.Command{
@@ -90,7 +103,6 @@ and JobSet/Kueue specific configurations like workload name, queue, slices, and 
 func runRunCmd(cmd *cobra.Command, args []string) {
 	logging.Info("Executing gcluster run command...")
 
-	// Validation logic for image flags
 	if dockerImage == "" && baseDockerImage == "" {
 		logging.Fatal("Either --docker-image or --base-docker-image must be provided.")
 	}
@@ -121,6 +133,14 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 		VmsPerSlice:             vmsPerSlice,
 		MaxRestarts:             maxRestarts,
 		TtlSecondsAfterFinished: ttlSecondsAfterFinished,
+		PlacementPolicy:         placementPolicy,
+		NodeSelector:            nodeSelector,
+		Affinity:                map[string]string{"cpu-affinity": cpuAffinityStr},
+		RestartOnExitCodes:      restartOnExitCodes,
+		ImagePullSecrets:        imagePullSecrets,
+		ServiceAccountName:      serviceAccountName,
+		Topology:                topology,
+		Scheduler:               scheduler,
 	}
 
 	gkeOrchestrator, err := gke.NewGKEOrchestrator()

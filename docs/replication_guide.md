@@ -2,36 +2,38 @@
 
 This guide provides a step-by-step process to deploy a GKE cluster, submit a sample Python script as a workload using `gcluster run` with on-the-fly image building via Crane, and then destroy the cluster.
 
-## 1. Prerequisites
+## 1. Prerequisites (Automated by `gcluster run`)
 
-Before you begin, ensure you have the following installed and configured:
+`gcluster run` now automates the setup and verification of most prerequisites. The tool will check for required installations and configurations, guide you through interactive steps, and remember successful checks to optimize subsequent runs.
 
-* **Go (1.20 or later):** Required for building the `gcluster` binary.
-* **Google Cloud SDK:** Includes `gcloud` and `kubectl`.
-  * Ensure `gcloud` is authenticated and configured with a default project (`gcloud auth login` and `gcloud config set project <YOUR_GCP_PROJECT_ID>`).
-  * Ensure `kubectl` is installed (`gcloud components install kubectl`).
-  * **Docker Credential Helper:** Configure Docker to authenticate to Google Container Registry and Artifact Registry. This allows `gcluster` to push/pull images.
+However, a few foundational components are still assumed or require your initial attention:
 
-    ```bash
-    gcloud auth configure-docker gcr.io
-    gcloud auth configure-docker us-central1-docker.pkg.dev # Or your Artifact Registry host
-    ```
-
-  * **Application Default Credentials (ADC):** Authenticate your local environment for Google Cloud client libraries and tools. This is an interactive step, requiring browser interaction.
-
-    ```bash
-    gcloud auth application-default login
-    ```
-
-  * **Enable Artifact Registry API:** Ensure the Artifact Registry API is enabled in your project.
-
-    ```bash
-    gcloud services enable artifactregistry.googleapis.com --project <YOUR_GCP_PROJECT_ID>
-    ```
-
-* **A GCP Project:** You will need a GCP project with billing enabled and necessary APIs enabled (e.g., Kubernetes Engine API, Artifact Registry API, Cloud Resource Manager API).
-* **Docker:** Required for building images locally if needed for debugging, but `gcluster run` uses Crane internally.
+* **Go (1.20 or later):** Required for building the `gcluster` binary. The `make` command used in step 3 will handle Go module dependencies.
+* **Google Cloud SDK (`gcloud`):** While `gcluster run` will guide you through authentication and project configuration, the `gcloud` CLI tool itself must be installed and available in your system's PATH. Download and install it from [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install).
+  * **Manual Authentication:** For interactive steps like `gcloud auth login` or `gcloud auth application-default login`, `gcluster run` will detect if you are unauthenticated and provide instructions to run these commands manually in your terminal. This is because these commands typically require browser interaction that cannot be automated.
+* **A GCP Project:** You will need a Google Cloud Project with billing enabled and necessary APIs enabled (e.g., Kubernetes Engine API, Artifact Registry API, Cloud Resource Manager API). `gcluster run` will prompt you to set a default project if none is configured and will automatically enable necessary APIs like Artifact Registry.
+* **Docker:** While `gcluster run` uses Crane internally for image building, having Docker installed can be useful for debugging or local image development. `gcluster run` will configure Docker credential helpers for Google Container Registry and Artifact Registry automatically.
 * **`make`:** (Usually pre-installed on Linux/macOS, or install via package manager).
+
+### Automated Prerequisite Checks Overview
+
+When you run `gcluster run` for the first time, or if its cached state is stale (after 24 hours) or the `--project` flag changes, the tool will perform the following checks and actions:
+
+* **Google Cloud SDK:** Verifies `gcloud` is installed.
+* **GCP Project Configuration:**
+  * If `--project` flag is not used, it attempts to infer from your `gcloud` configuration.
+  * If no project is configured, it will prompt you to enter your GCP Project ID and automatically configure `gcloud`.
+* **Gcloud Authentication:**
+  * Checks if `gcloud` is authenticated. If not, it will instruct you to run `gcloud auth login` manually.
+  * Checks for Application Default Credentials (ADC). If not configured, it will instruct you to run `gcloud auth application-default login` manually.
+* **`kubectl` Installation:**
+  * Checks if `kubectl` is installed.
+  * If not, it will prompt you to install it via `gcloud components install kubectl`.
+  * If `gcloud components install kubectl` fails (e.g., component manager disabled), it will offer to install `kubectl` via `sudo apt-get install kubectl` (for Debian/Ubuntu systems).
+* **Docker Credential Helper:** Configures Docker to authenticate to Google Container Registry and Artifact Registry.
+* **Artifact Registry API:** Ensures `artifactregistry.googleapis.com` is enabled for your project, enabling it automatically if necessary.
+
+**State Persistence:** To avoid redundant checks, `gcluster run` saves the successful prerequisite status in `~/.gcluster-job/prereq_state.json`. Checks will only be re-run if this state is older than 24 hours or if you specify a different GCP project.
 
 ## 2. Clone the Repository
 

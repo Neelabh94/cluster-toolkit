@@ -15,9 +15,11 @@
 package cmd
 
 import (
+	"fmt"
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/orchestrator/gke"
+	"hpc-toolkit/pkg/prereq"
 
 	"github.com/spf13/cobra"
 )
@@ -96,7 +98,16 @@ or built on-the-fly using Crane (--base-docker-image with --build-context).
 
 It accepts parameters for the Docker image, command to execute, accelerator type,
 and JobSet/Kueue specific configurations like workload name, queue, slices, and restarts.`,
-	Run:          runRunCmd,
+	Run: runRunCmd,
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		logging.Info("Running prerequisite checks for 'gcluster run'...")
+		err := prereq.EnsurePrerequisites(&projectID)
+		if err != nil {
+			return fmt.Errorf("prerequisite checks failed: %w", err)
+		}
+		logging.Info("Prerequisite checks completed successfully.")
+		return nil
+	},
 	SilenceUsage: true,
 }
 

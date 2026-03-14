@@ -131,12 +131,27 @@ type ManifestOptions struct {
 	TopologyAnnotation      string
 	SchedulerName           string
 	Tolerations             string
+	AwaitJobCompletion      bool
 }
 
-type GKEOrchestrator struct{}
+type Executor interface {
+	ExecuteCommand(name string, args ...string) shell.CommandResult
+}
+
+type DefaultExecutor struct{}
+
+func (d *DefaultExecutor) ExecuteCommand(name string, args ...string) shell.CommandResult {
+	return shell.ExecuteCommand(name, args...)
+}
+
+type GKEOrchestrator struct {
+	executor Executor
+}
 
 func NewGKEOrchestrator() (*GKEOrchestrator, error) {
-	return &GKEOrchestrator{}, nil
+	return &GKEOrchestrator{
+		executor: &DefaultExecutor{},
+	}, nil
 }
 
 func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
@@ -192,12 +207,19 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 		return err
 	}
 
+	if job.AwaitJobCompletion && job.OutputManifest == "" {
+		err = g.waitForJobCompletion(job.WorkloadName, job.ClusterName, job.ClusterLocation, job.ProjectID)
+		if err != nil {
+			return err
+		}
+	}
+
 	logging.Info("gcluster run workflow completed.")
 	return nil
 }
 
 func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) error {
-	res := shell.ExecuteCommand("kubectl", "get", "localqueue", localQueueName, "-n", "default", "-o", "jsonpath={.spec.clusterQueue}")
+	res := g.executor.ExecuteCommand("kubectl", "get", "localqueue", localQueueName, "-n", "default", "-o", "jsonpath={.spec.clusterQueue}")
 	if res.ExitCode != 0 {
 		return fmt.Errorf("failed to find clusterqueue for %s: %s", localQueueName, res.Stderr)
 	}
@@ -206,7 +228,7 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 		cqName = localQueueName
 	}
 
-	res = shell.ExecuteCommand("kubectl", "get", "clusterqueue", cqName, "-o", "json")
+	res = g.executor.ExecuteCommand("kubectl", "get", "clusterqueue", cqName, "-o", "json")
 	if res.ExitCode != 0 {
 		return fmt.Errorf("failed to get clusterqueue %s: %s", cqName, res.Stderr)
 	}
@@ -249,7 +271,7 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "memory", "nominalQuota": "2000Gi"}}
 	]`
 
-	res = shell.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
+	res = g.executor.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
 	if res.ExitCode != 0 {
 		return fmt.Errorf("failed to patch clusterqueue: %s", res.Stderr)
 	}
@@ -260,7 +282,7 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 
 func (g *GKEOrchestrator) getProjectID(initialProjectID string) (string, error) {
 	if initialProjectID == "" {
-		res := shell.ExecuteCommand("gcloud", "config", "get-value", "project")
+		res := g.executor.ExecuteCommand("gcloud", "config", "get-value", "project")
 		if res.ExitCode != 0 {
 			return "", fmt.Errorf("failed to get GCP project ID from gcloud config: %s", res.Stderr)
 		}
@@ -282,7 +304,7 @@ func (g *GKEOrchestrator) resolveKueueQueue(requested string) (string, error) {
 	}
 
 	logging.Info("Auto-discovering Kueue LocalQueue...")
-	res := shell.ExecuteCommand("kubectl", "get", "localqueue", "-n", "default", "-o", "jsonpath={.items[*].metadata.name}")
+	res := g.executor.ExecuteCommand("kubectl", "get", "localqueue", "-n", "default", "-o", "jsonpath={.items[*].metadata.name}")
 	if res.ExitCode != 0 {
 		return "", fmt.Errorf("failed to query LocalQueues: %s", res.Stderr)
 	}
@@ -311,11 +333,11 @@ func (g *GKEOrchestrator) resolveAcceleratorType(requested string) (string, erro
 
 	logging.Info("Auto-discovering Accelerator Type...")
 
-	res := shell.ExecuteCommand("kubectl", "get", "resourceflavors.kueue.x-k8s.io", "-o", "jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-accelerator}{\"\\n\"}{end}")
+	res := g.executor.ExecuteCommand("kubectl", "get", "resourceflavors.kueue.x-k8s.io", "-o", "jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-accelerator}{\"\\n\"}{end}")
 	output := strings.TrimSpace(res.Stdout)
 
 	if res.ExitCode != 0 || output == "" {
-		res = shell.ExecuteCommand("kubectl", "get", "nodes", "-o", "jsonpath={range .items[*]}{.metadata.labels.cloud\\.google\\.com/gke-accelerator}{\"\\n\"}{end}")
+		res = g.executor.ExecuteCommand("kubectl", "get", "nodes", "-o", "jsonpath={range .items[*]}{.metadata.labels.cloud\\.google\\.com/gke-accelerator}{\"\\n\"}{end}")
 		if res.ExitCode != 0 {
 			return "", fmt.Errorf("failed to query Nodes for accelerators: %s", res.Stderr)
 		}
@@ -388,7 +410,7 @@ func (g *GKEOrchestrator) buildDockerImage(project, baseDockerImage, buildContex
 }
 
 func (g *GKEOrchestrator) configureKubectl(clusterName, clusterLocation, projectID string) error {
-	credsRes := shell.ExecuteCommand("gcloud", "container", "clusters", "get-credentials", clusterName, "--zone", clusterLocation, "--project", projectID)
+	credsRes := g.executor.ExecuteCommand("gcloud", "container", "clusters", "get-credentials", clusterName, "--zone", clusterLocation, "--project", projectID)
 	if credsRes.ExitCode != 0 {
 		return fmt.Errorf("failed to get GKE cluster credentials: %s\n%s", credsRes.Stderr, credsRes.Stdout)
 	}
@@ -410,7 +432,7 @@ func (g *GKEOrchestrator) generateAndApplyManifest(opts ManifestOptions, outputM
 		logging.Info("GKE manifest saved successfully.")
 	} else {
 		logging.Info("Cleaning up any existing JobSet with name '%s'...", opts.WorkloadName)
-		shell.ExecuteCommand("kubectl", "delete", "jobset", opts.WorkloadName, "--ignore-not-found=true")
+		g.executor.ExecuteCommand("kubectl", "delete", "jobset", opts.WorkloadName, "--ignore-not-found=true")
 
 		logging.Info("Applying GKE manifest to cluster...")
 		err = g.applyJobSetManifests([]byte(gkeManifestContent))
@@ -427,7 +449,7 @@ func (g *GKEOrchestrator) checkAndInstallJobSetCRD() error {
 		return err
 	} else if installed {
 		logging.Info("JobSet CRD found. Verifying Webhook health...")
-		cmdEndpoints := shell.ExecuteCommand("kubectl", "get", "endpoints", "jobset-webhook-service", "-n", "jobset-system", "-o", "jsonpath={.subsets[*].addresses[*].ip}")
+		cmdEndpoints := g.executor.ExecuteCommand("kubectl", "get", "endpoints", "jobset-webhook-service", "-n", "jobset-system", "-o", "jsonpath={.subsets[*].addresses[*].ip}")
 		if cmdEndpoints.ExitCode == 0 && strings.TrimSpace(cmdEndpoints.Stdout) != "" {
 			logging.Info("JobSet Webhook is healthy.")
 			return nil
@@ -453,7 +475,7 @@ func (g *GKEOrchestrator) installJobSetCRD(jobSetManifestsURL string) error {
 	}
 
 	logging.Info("Force-recreating JobSet Controller Manager...")
-	shell.ExecuteCommand("kubectl", "delete", "deployment", "jobset-controller-manager", "-n", "jobset-system", "--ignore-not-found=true")
+	g.executor.ExecuteCommand("kubectl", "delete", "deployment", "jobset-controller-manager", "-n", "jobset-system", "--ignore-not-found=true")
 
 	if err := g.applyJobSetManifests(cleanedManifests); err != nil {
 		return err
@@ -474,12 +496,12 @@ func (g *GKEOrchestrator) waitForJobSetWebhook() error {
 
 	logging.Info("Verifying JobSet webhook service endpoints...")
 	for i := 0; i < 100; i++ {
-		cmdEndpoints := shell.ExecuteCommand("kubectl", "get", "endpoints", "jobset-webhook-service", "-n", "jobset-system", "-o", "jsonpath={.subsets[*].addresses[*].ip}")
+		cmdEndpoints := g.executor.ExecuteCommand("kubectl", "get", "endpoints", "jobset-webhook-service", "-n", "jobset-system", "-o", "jsonpath={.subsets[*].addresses[*].ip}")
 		if cmdEndpoints.ExitCode == 0 && strings.TrimSpace(cmdEndpoints.Stdout) != "" {
 			logging.Info("JobSet webhook service endpoints are available.")
 			return nil
 		}
-		shell.ExecuteCommand("sleep", "3")
+		g.executor.ExecuteCommand("sleep", "3")
 	}
 
 	return fmt.Errorf("timed out waiting for jobset-webhook-service endpoints to be available")
@@ -487,7 +509,7 @@ func (g *GKEOrchestrator) waitForJobSetWebhook() error {
 
 func (g *GKEOrchestrator) isJobSetCRDInstalled() (bool, error) {
 	logging.Info("Checking for JobSet CRD installation...")
-	res := shell.ExecuteCommand("kubectl", "get", "crd", "jobsets.jobset.x-k8s.io")
+	res := g.executor.ExecuteCommand("kubectl", "get", "crd", "jobsets.jobset.x-k8s.io")
 	if res.ExitCode == 0 {
 		logging.Info("JobSet CRD already installed.")
 		return true, nil
@@ -850,6 +872,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		TopologyAnnotation:      topologyAnnotationStr,
 		SchedulerName:           job.Scheduler,
 		Tolerations:             tolerationsStr,
+		AwaitJobCompletion:      job.AwaitJobCompletion,
 	}, nil
 }
 
@@ -1013,6 +1036,44 @@ func (g *GKEOrchestrator) getDynamicClient() (dynamic.Interface, error) {
 	}
 	return dynamic.NewForConfig(config)
 }
+
+func (g *GKEOrchestrator) waitForJobCompletion(workloadName, clusterName, clusterLocation, projectID string) error {
+	logging.Info("Waiting for job '%s' to complete...", workloadName)
+
+	// kubectl wait --for jsonpath='.status.conditions[-1].type'=Finished jobset <workloadName> --timeout=1h
+	waitRes := g.executor.ExecuteCommand("kubectl", "wait", "--for", "jsonpath={.status.conditions[-1].type}=Finished",
+		"jobset", workloadName, "--timeout=1h")
+
+	jobConsoleLink := fmt.Sprintf("https://console.cloud.google.com/kubernetes/workload/gke/%s/%s/details/%s?project=%s",
+		clusterLocation, clusterName, workloadName, projectID)
+
+	if waitRes.ExitCode != 0 {
+		if strings.Contains(waitRes.Stderr, "timed out waiting") || strings.Contains(waitRes.Stdout, "timed out waiting") {
+			logging.Error("Timed out waiting for job '%s' to finish. Check its status in the Cloud Console: %s", workloadName, jobConsoleLink)
+			return fmt.Errorf("job timed out")
+		}
+		return fmt.Errorf("error waiting for job completion: %s\n%s", waitRes.Stderr, waitRes.Stdout)
+	}
+
+	logging.Info("Job '%s' has finished. Checking final status...", workloadName)
+
+	// kubectl get jobset <workloadName> -o jsonpath='{.status.conditions[-1].type}'
+	statusRes := g.executor.ExecuteCommand("kubectl", "get", "jobset", workloadName, "-o", "jsonpath={.status.conditions[-1].type}")
+
+	if statusRes.ExitCode != 0 {
+		return fmt.Errorf("failed to get final job status: %s\n%s", statusRes.Stderr, statusRes.Stdout)
+	}
+
+	finalStatus := strings.TrimSpace(statusRes.Stdout)
+	if finalStatus != "Completed" {
+		logging.Error("Job '%s' finished with status '%s'. Check details in the Cloud Console: %s", workloadName, finalStatus, jobConsoleLink)
+		return fmt.Errorf("job completed unsuccessfully with status: %s", finalStatus)
+	}
+
+	logging.Info("Job '%s' completed successfully. View details in the Cloud Console: %s", workloadName, jobConsoleLink)
+	return nil
+}
+
 func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptions, job orchestrator.JobDefinition) (string, error) {
 	nodeSelector := scheduling.GetNodeSelector(schedOpts)
 	accelLabel := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)

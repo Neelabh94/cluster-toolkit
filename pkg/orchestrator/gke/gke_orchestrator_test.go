@@ -16,15 +16,40 @@ package gke
 
 import (
 	"hpc-toolkit/pkg/orchestrator"
+	"hpc-toolkit/pkg/shell"
 	"strings"
 	"testing"
 )
 
-func TestGenerateGKEManifest_Accelerators(t *testing.T) {
-	orc, err := NewGKEOrchestrator()
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
+type MockExecutor struct {
+	responses map[string][]shell.CommandResult
+	callCount map[string]int
+}
+
+func NewMockExecutor(responses map[string][]shell.CommandResult) *MockExecutor {
+	return &MockExecutor{
+		responses: responses,
+		callCount: make(map[string]int),
 	}
+}
+
+func (m *MockExecutor) ExecuteCommand(name string, args ...string) shell.CommandResult {
+	cmdKey := name + " " + strings.Join(args, " ")
+
+	for key, results := range m.responses {
+		if strings.HasPrefix(cmdKey, key) {
+			count := m.callCount[key]
+			if count < len(results) {
+				m.callCount[key]++
+				return results[count]
+			}
+		}
+	}
+
+	return shell.CommandResult{ExitCode: 1, Stderr: "mock error: unexpected command"}
+}
+
+func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 
 	tests := []struct {
 		name            string
@@ -115,6 +140,8 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 				CommandToRun:    "echo hello",
 				AcceleratorType: tt.acceleratorType,
 			}
+
+			orc := &GKEOrchestrator{executor: NewMockExecutor(make(map[string][]shell.CommandResult))} // No specific mocks needed for this test
 
 			opts, err := orc.prepareManifestOptions(job, "test-image:latest")
 			if err != nil {
@@ -210,5 +237,92 @@ spec:
 	}
 	if !strings.Contains(cleanedString, "control-plane: controller-manager") {
 		t.Errorf("Resulting manifest should contain control-plane: controller-manager label.\nGot:\n%s", cleanedString)
+	}
+}
+
+func TestWaitForJobCompletion(t *testing.T) {
+	workloadName := "test-workload"
+	clusterName := "test-cluster"
+	clusterLocation := "us-central1-a"
+	projectID := "test-project"
+
+	tests := []struct {
+		name          string
+		mockResponses map[string][]shell.CommandResult
+		expectedError string
+	}{
+		{
+			name: "Successful completion",
+			mockResponses: map[string][]shell.CommandResult{
+				"kubectl wait --for jsonpath={.status.conditions[-1].type}=Finished jobset test-workload --timeout=1h": {
+					{ExitCode: 0, Stdout: "jobset.jobset.x-k8s.io/test-workload condition met"},
+				},
+				"kubectl get jobset test-workload -o jsonpath={.status.conditions[-1].type}": {
+					{ExitCode: 0, Stdout: "Completed"},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "Job timeout",
+			mockResponses: map[string][]shell.CommandResult{
+				"kubectl wait --for jsonpath={.status.conditions[-1].type}=Finished jobset test-workload --timeout=1h": {
+					{ExitCode: 1, Stderr: "timed out waiting for conditions to be met"},
+				},
+			},
+			expectedError: "job timed out",
+		},
+		{
+			name: "Job finished but not completed",
+			mockResponses: map[string][]shell.CommandResult{
+				"kubectl wait --for jsonpath={.status.conditions[-1].type}=Finished jobset test-workload --timeout=1h": {
+					{ExitCode: 0, Stdout: "jobset.jobset.x-k8s.io/test-workload condition met"},
+				},
+				"kubectl get jobset test-workload -o jsonpath={.status.conditions[-1].type}": {
+					{ExitCode: 0, Stdout: "Failed"},
+				},
+			},
+			expectedError: "job completed unsuccessfully with status: Failed",
+		},
+		{
+			name: "Error during kubectl wait",
+			mockResponses: map[string][]shell.CommandResult{
+				"kubectl wait --for jsonpath={.status.conditions[-1].type}=Finished jobset test-workload --timeout=1h": {
+					{ExitCode: 1, Stderr: "some kubectl error"},
+				},
+			},
+			expectedError: "error waiting for job completion: some kubectl error\n",
+		},
+		{
+			name: "Error during kubectl get status",
+			mockResponses: map[string][]shell.CommandResult{
+				"kubectl wait --for jsonpath={.status.conditions[-1].type}=Finished jobset test-workload --timeout=1h": {
+					{ExitCode: 0, Stdout: "jobset.jobset.x-k8s.io/test-workload condition met"},
+				},
+				"kubectl get jobset test-workload -o jsonpath={.status.conditions[-1].type}": {
+					{ExitCode: 1, Stderr: "some get status error"},
+				},
+			},
+			expectedError: "failed to get final job status: some get status error\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockExecutor := NewMockExecutor(tt.mockResponses)
+			orc := &GKEOrchestrator{executor: mockExecutor}
+
+			err := orc.waitForJobCompletion(workloadName, clusterName, clusterLocation, projectID)
+
+			if tt.expectedError == "" {
+				if err != nil {
+					t.Errorf("Expected no error, but got: %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tt.expectedError) {
+					t.Errorf("Expected error containing %q, but got: %v", tt.expectedError, err)
+				}
+			}
+		})
 	}
 }

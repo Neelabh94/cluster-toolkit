@@ -43,6 +43,7 @@ type JobDefinition struct {
 	ServiceAccountName string
 	Topology           string
 	Scheduler          string
+	AwaitJobCompletion bool
 }
 
 type JobStatus struct {

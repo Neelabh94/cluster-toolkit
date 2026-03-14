@@ -52,6 +52,8 @@ var (
 	topology           string
 	scheduler          string
 	platform           string
+
+	awaitJobCompletion bool
 )
 
 func init() {
@@ -83,6 +85,7 @@ func init() {
 	runCmd.Flags().StringVar(&serviceAccountName, "service-account", "", "Service account name for the pods.")
 	runCmd.Flags().StringVar(&topology, "topology", "", "TPU slice topology (e.g., 2x2x1).")
 	runCmd.Flags().StringVar(&scheduler, "scheduler", "", "Kubernetes Scheduler name (e.g., gke.io/topology-aware-auto).")
+	runCmd.Flags().BoolVar(&awaitJobCompletion, "await-job-completion", false, "If true, gcluster will wait for the submitted job to complete.")
 
 	_ = runCmd.MarkFlagRequired("command")
 	_ = runCmd.MarkFlagRequired("cluster-name")
@@ -152,6 +155,7 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 		ServiceAccountName:      serviceAccountName,
 		Topology:                topology,
 		Scheduler:               scheduler,
+		AwaitJobCompletion:      awaitJobCompletion,
 	}
 
 	gkeOrchestrator, err := gke.NewGKEOrchestrator()

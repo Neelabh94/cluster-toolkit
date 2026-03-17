@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"fmt"
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/orchestrator/gke"
@@ -22,42 +23,43 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var logsCmd = &cobra.Command{
+	Use:   "logs [job-name]",
+	Short: "Fetch logs for a job in the cluster.",
+	Args:  cobra.ExactArgs(1),
+	Run:   runLogsCmd,
+}
+
 func init() {
-	jobCmd.AddCommand(cancelJobCmd)
+	jobCmd.AddCommand(logsCmd)
 
-	cancelJobCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
-	cancelJobCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	cancelJobCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
+	logsCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
+	logsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	logsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
 
-	_ = cancelJobCmd.MarkFlagRequired("cluster")
-	_ = cancelJobCmd.MarkFlagRequired("cluster-region")
+	_ = logsCmd.MarkFlagRequired("cluster")
+	_ = logsCmd.MarkFlagRequired("cluster-region")
 }
 
-var cancelJobCmd = &cobra.Command{
-	Use:          "cancel [job-name]",
-	Short:        "Cancel a job from the cluster.",
-	Args:         cobra.ExactArgs(1),
-	Run:          runCancelJob,
-	SilenceUsage: true,
-}
-
-func runCancelJob(cmd *cobra.Command, args []string) {
+func runLogsCmd(cmd *cobra.Command, args []string) {
 	jobName := args[0]
-	logging.Info("Cancelling job %s...", jobName)
-
+	logging.Info("Fetching logs for job %s...", jobName)
 
 	orc, err := gke.NewGKEOrchestrator()
 	if err != nil {
 		logging.Fatal("Failed to create orchestrator: %v", err)
 	}
 
-	opts := orchestrator.DeleteOptions{
+	opts := orchestrator.LogsOptions{
 		ClusterName:     clusterName,
 		ClusterLocation: clusterLocation,
 		ProjectID:       projectID,
 	}
 
-	if err := orc.DeleteJob(jobName, opts); err != nil {
-		logging.Fatal("Failed to delete job: %v", err)
+	output, err := orc.GetJobLogs(jobName, opts)
+	if err != nil {
+		logging.Fatal("Failed to get logs: %v", err)
 	}
+
+	fmt.Println(output)
 }

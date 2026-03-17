@@ -1,23 +1,23 @@
-# Replication Guide: `gcluster run` Sample Workload
+# Replication Guide: `gcluster job submit` Sample Job
 
-This guide provides a step-by-step process to deploy a GKE cluster, submit a sample Python script as a workload using `gcluster run` with on-the-fly image building via Crane, and then destroy the cluster.
+This guide provides a step-by-step process to deploy a GKE cluster, submit a sample Python script as a job using `gcluster job submit` with on-the-fly image building via Crane, and then destroy the cluster.
 
-## 1. Prerequisites (Automated by `gcluster run`)
+## 1. Prerequisites (Automated by `gcluster job submit`)
 
-`gcluster run` now automates the setup and verification of most prerequisites. The tool will check for required installations and configurations, guide you through interactive steps, and remember successful checks to optimize subsequent runs.
+`gcluster job submit` now automates the setup and verification of most prerequisites. The tool will check for required installations and configurations, guide you through interactive steps, and remember successful checks to optimize subsequent runs.
 
 However, a few foundational components are still assumed or require your initial attention:
 
 * **Go (1.20 or later):** Required for building the `gcluster` binary. The `make` command used in step 3 will handle Go module dependencies.
-* **Google Cloud SDK (`gcloud`):** While `gcluster run` will guide you through authentication and project configuration, the `gcloud` CLI tool itself must be installed and available in your system's PATH. Download and install it from [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install).
-  * **Manual Authentication:** For interactive steps like `gcloud auth login` or `gcloud auth application-default login`, `gcluster run` will detect if you are unauthenticated and provide instructions to run these commands manually in your terminal. This is because these commands typically require browser interaction that cannot be automated.
-* **A GCP Project:** You will need a Google Cloud Project with billing enabled and necessary APIs enabled (e.g., Kubernetes Engine API, Artifact Registry API, Cloud Resource Manager API). `gcluster run` will prompt you to set a default project if none is configured and will automatically enable necessary APIs like Artifact Registry.
-* **Docker:** While `gcluster run` uses Crane internally for image building, having Docker installed can be useful for debugging or local image development. `gcluster run` will configure Docker credential helpers for Google Container Registry and Artifact Registry automatically.
+* **Google Cloud SDK (`gcloud`):** While `gcluster job submit` will guide you through authentication and project configuration, the `gcloud` CLI tool itself must be installed and available in your system's PATH. Download and install it from [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install).
+  * **Manual Authentication:** For interactive steps like `gcloud auth login` or `gcloud auth application-default login`, `gcluster job submit` will detect if you are unauthenticated and provide instructions to run these commands manually in your terminal. This is because these commands typically require browser interaction that cannot be automated.
+* **A GCP Project:** You will need a Google Cloud Project with billing enabled and necessary APIs enabled (e.g., Kubernetes Engine API, Artifact Registry API, Cloud Resource Manager API). `gcluster job submit` will prompt you to set a default project if none is configured and will automatically enable necessary APIs like Artifact Registry.
+* **Docker:** While `gcluster job submit` uses Crane internally for image building, having Docker installed can be useful for debugging or local image development. `gcluster job submit` will configure Docker credential helpers for Google Container Registry and Artifact Registry automatically.
 * **`make`:** (Usually pre-installed on Linux/macOS, or install via package manager).
 
 ### Automated Prerequisite Checks Overview
 
-When you run `gcluster run` for the first time, or if its cached state is stale (after 24 hours) or the `--project` flag changes, the tool will perform the following checks and actions:
+When you run `gcluster job submit` for the first time, or if its cached state is stale (after 24 hours) or the `--project` flag changes, the tool will perform the following checks and actions:
 
 * **Google Cloud SDK:** Verifies `gcloud` is installed.
 * **GCP Project Configuration:**
@@ -33,7 +33,7 @@ When you run `gcluster run` for the first time, or if its cached state is stale 
 * **Docker Credential Helper:** Configures Docker to authenticate to Google Container Registry and Artifact Registry.
 * **Artifact Registry API:** Ensures `artifactregistry.googleapis.com` is enabled for your project, enabling it automatically if necessary.
 
-**State Persistence:** To avoid redundant checks, `gcluster run` saves the successful prerequisite status in `~/.gcluster-job/prereq_state.json`. Checks will only be re-run if this state is older than 24 hours or if you specify a different GCP project.
+**State Persistence:** To avoid redundant checks, `gcluster job submit` saves the successful prerequisite status in `~/.gcluster-job/prereq_state.json`. Checks will only be re-run if this state is older than 24 hours or if you specify a different GCP project.
 
 ## 2. Clone the Repository
 
@@ -52,11 +52,11 @@ Navigate to the `cluster-toolkit` directory (if not already there) and build the
 make
 ```
 
-This command compiles the Go source code, including the `gcluster run` command, and creates an executable named `gcluster` in the current directory.
+This command compiles the Go source code, including the `gcluster job submit` command, and creates an executable named `gcluster` in the current directory.
 
 ## 4. Prepare Sample Application Code
 
-Create a directory named `job_details` and place the following files inside it. This will serve as your build context for the workload.
+Create a directory named `job_details` and place the following files inside it. This will serve as your build context for the job.
 
 ### `cluster-toolkit/job_details/Dockerfile`
 
@@ -86,7 +86,7 @@ CMD ["python", "app.py"]
 
 ```python
 # app.py
-print("Hello from the gcluster run application!")
+print("Hello from the gcluster job submit application!")
 print("This is a sample application running on GKE.")
 ```
 
@@ -119,50 +119,50 @@ For this example, we'll deploy a basic GKE cluster using the `hpc-gke.yaml` blue
 
     *This deployment process can take a significant amount of time (e.g., 10-20 minutes or more) as it provisions cloud resources.* Wait for the command to complete successfully.
 
-## 6. `gcluster run` Command Reference
+## 6. `gcluster job submit` Command Reference
 
-The `gcluster run` command deploys a Docker image as a workload (Kubernetes JobSet) on a GKE cluster, integrated with Kueue. It can use pre-built images or build images on-the-fly using Crane.
+The `gcluster job submit` command deploys a Docker image as a job (Kubernetes JobSet) on a GKE cluster, integrated with Kueue. It can use pre-built images or build images on-the-fly using Crane.
 
 ### Supported Flags
 
-Here are the flags currently supported by `gcluster run`:
+Here are the flags currently supported by `gcluster job submit`:
 
-* `-i, --docker-image string`: Name of a pre-built Docker image to run (e.g., `my-project/my-image:tag`). Use this if your image is already pushed to a registry.
+* `-i, --image string`: Name of a pre-built Docker image to run (e.g., `my-project/my-image:tag`). Use this if your image is already pushed to a registry.
 * `--base-docker-image string`: Name of the base Docker image for Crane to build upon (e.g., `python:3.9-slim`). Required when using `--build-context` for an on-the-fly build.
 * `-c, --build-context string`: Path to the build context directory for Crane (e.g., `./job_details`). Required with `--base-docker-image`. Crane will automatically look for a `Dockerfile` within this directory.
 * `-e, --command string`: Command to execute in the container (e.g., `'python app.py'`). This overrides the `CMD` instruction in your `Dockerfile`. (Required)
-* `-a, --accelerator-type string`: Type of accelerator to request (e.g., `'nvidia-h100-mega-80gb'`). If empty, `gcluster run` will auto-discover the optimal accelerator available on the cluster nodes. (Optional)
-* `-o, --output-manifest string`: Path to output the generated Kubernetes manifest instead of applying it directly to the cluster. Useful for inspection.
-* `--cluster-name string`: Name of the GKE cluster to deploy the workload to. (Required)
+* `-a, --accelerator string`: Type of accelerator to request (e.g., `'nvidia-h100-mega-80gb'`). If empty, `gcluster job submit` will auto-discover the optimal accelerator available on the cluster nodes. (Optional)
+* `-o, --dry-run-out string`: Path to output the generated Kubernetes manifest instead of applying it directly to the cluster. Useful for inspection.
+* `--cluster string`: Name of the GKE cluster to deploy the job to. (Required)
 * `--cluster-region string`: Region of the GKE cluster. (Required)
 * `-p, --project string`: Google Cloud Project ID. If not provided, it will be inferred from your `gcloud` configuration.
 * `-f, --platform string`: Target platform for the Docker image build (e.g., `'linux/amd64'`, `'linux/arm64'`). Used with `--base-docker-image`. (Default: `linux/amd64`)
-* `-w, --workload-name string`: Name of the workload (JobSet) to create. This name will be used for Kubernetes resources. (Required)
-* `--kueue-queue string`: Name of the Kueue LocalQueue to submit the workload to. (Default: Auto-discovered from the cluster)
-* `--num-slices int`: Number of JobSet replicas (slices). (Default: `1`)
+* `-w, --name string`: Name of the job (JobSet) to create. This name will be used for Kubernetes resources. (Required)
+* `--kueue-queue string`: Name of the Kueue LocalQueue to submit the job to. (Default: Auto-discovered from the cluster)
+* `--nodes int`: Number of JobSet replicas (slices). (Default: `1`)
 * `--vms-per-slice int`: Number of VMs (pods) per slice. (Default: `1`)
 * `--max-restarts int`: Maximum number of restarts for the JobSet before failing. (Default: `1`)
 * `--ttl-seconds-after-finished int`: Time (in seconds) to retain the JobSet after it finishes. (Default: `3600` seconds / 1 hour)
 
-## 7. Submit the Sample Workload with `gcluster run`
+## 7. Submit the Sample Job with `gcluster job submit`
 
-Now that the cluster is deployed and your application code is prepared, you can submit your sample Python script as a JobSet workload. `gcluster run` will automatically build your Docker image using Crane and push it to Artifact Registry (or Container Registry) in your project.
+Now that the cluster is deployed and your application code is prepared, you can submit your sample Python script as a JobSet job. `gcluster job submit` will automatically build your Docker image using Crane and push it to Artifact Registry (or Container Registry) in your project.
 
-### Unified Workload Submission
+### Unified Job Submission
 
-Because `gcluster run` features auto-discovery, you can use the exact same command to deploy to a standard CPU cluster (like `hpc-gke`) or an accelerated GPU/TPU cluster (like `gke-a3-megagpu`). The orchestrator will automatically query the Kubernetes cluster API to discover the installed Node Accelerators and Kueue Queues, injecting the exact `nvidia.com/gpu` limits your hardware requires.
+Because `gcluster job submit` features auto-discovery, you can use the exact same command to deploy to a standard CPU cluster (like `hpc-gke`) or an accelerated GPU/TPU cluster (like `gke-a3-megagpu`). The orchestrator will automatically query the Kubernetes cluster API to discover the installed Node Accelerators and Kueue Queues, injecting the exact `nvidia.com/gpu` limits your hardware requires.
 
-* **Submit the workload:**
+* **Submit the Job:**
 
     ```bash
-    ./gcluster run \
+    ./gcluster job submit \
       --project <YOUR_GCP_PROJECT_ID> \
-      --cluster-name my-test-cluster \
+      --cluster my-test-cluster \
       --cluster-region us-central1 \
       --base-docker-image python:3.9-slim \
       --build-context job_details \
       --command "python app.py" \
-      --workload-name my-python-app-job
+      --name my-python-app-job
     ```
 
     *Replace `<YOUR_GCP_PROJECT_ID>` with your actual GCP Project ID.*
@@ -174,7 +174,7 @@ Because `gcluster run` features auto-discovery, you can use the exact same comma
     4. Build a Docker image from `job_details/Dockerfile` using `python:3.9-slim` as the base, and push it to Artifact Registry.
     5. Generate and apply an intelligently configured Kubernetes JobSet manifest to your `my-test-cluster`.
 
-## 8. Verify the Workload
+## 8. Verify the Job
 
 Verify that the Kubernetes JobSet ran successfully on your GKE cluster.
 
@@ -204,22 +204,22 @@ Verify that the Kubernetes JobSet ran successfully on your GKE cluster.
     You should see the output:
 
     ```text
-    Hello from the gcluster run application!
+    Hello from the gcluster job submit application!
     This is a sample application running on GKE.
     ```
 
 ## 8. Verify Phase 2 Features (Advanced Scheduling & Lifecycle)
 
-Phase 2 introduces job lifecycle management (`workload list`, `workload delete`) and advanced scheduling flags.
+Phase 2 introduces job lifecycle management (`job list`, `job cancel`) and advanced scheduling flags.
 
-### 8.1 List Workloads
+### 8.1 List Jobs
 
-You can now list the status of workloads directly through `gcluster`.
+You can now list the status of jobs directly through `gcluster`.
 
 ```bash
-./gcluster workload list \
+./gcluster job list \
   --project <YOUR_GCP_PROJECT_ID> \
-  --cluster-name my-test-cluster \
+  --cluster my-test-cluster \
   --cluster-region us-central1
 ```
 
@@ -235,14 +235,14 @@ Try running a job with advanced scheduling options.
 Use `--machine-label` to target specific hardware (e.g., C2 nodes).
 
 ```bash
-./gcluster run \
+./gcluster job submit \
   --project <YOUR_GCP_PROJECT_ID> \
-  --cluster-name my-test-cluster \
+  --cluster my-test-cluster \
   --cluster-region us-central1 \
   --base-docker-image python:3.9-slim \
   --build-context job_details \
   --command "python app.py" \
-  --workload-name my-machine-job \
+  --name my-machine-job \
   --machine-label "node.kubernetes.io/instance-type=c2-standard-60"
 ```
 
@@ -250,9 +250,9 @@ Use `--machine-label` to target specific hardware (e.g., C2 nodes).
 Use `--placement-policy` to specify a GKE Placement Policy (e.g., for compact placement to reduce latency).
 
 ```bash
-./gcluster run \
+./gcluster job submit \
   ... \
-  --workload-name my-compact-job \
+  --name my-compact-job \
   --placement-policy "compact-placement"
 ```
 
@@ -262,44 +262,44 @@ Use `--placement-policy` to specify a GKE Placement Policy (e.g., for compact pl
 Use `--restart-on-exit-codes` to ignore specific exit codes (e.g., treating exit code 1 as success or retriable non-failure).
 
 ```bash
-./gcluster run \
+./gcluster job submit \
   ... \
-  --workload-name my-robust-job \
+  --name my-robust-job \
   --restart-on-exit-codes 0,1,137
 ```
 
 (Note: Exit code 0 is always ignored by default)
 
 **Example 4: Private Registry & Service Account**
-Use `--image-pull-secret` and `--service-account` for secure workloads.
+Use `--image-pull-secret` and `--service-account` for secure jobs.
 
 ```bash
-./gcluster run \
+./gcluster job submit \
   ... \
-  --workload-name my-secure-job \
+  --name my-secure-job \
   --image-pull-secret "my-private-registry-secret" \
   --service-account "my-workload-sa"
 ```
 
-### 8.4 Delete Workloads
+### 8.4 Delete Jobs
 
-You can clean up specific workloads without destroying the entire cluster.
+You can clean up specific job without destroying the entire cluster.
 
 ```bash
-./gcluster workload delete my-python-app-job \
+./gcluster job cancel my-python-app-job \
   --project <YOUR_GCP_PROJECT_ID> \
-  --cluster-name my-test-cluster \
+  --cluster my-test-cluster \
   --cluster-region us-central1
 ```
 
-Verify it's gone by running `gcluster workload list` again.
+Verify it's gone by running `gcluster job list` again.
 
 ### 8.5 Job Retention (TTL)
 
 By default, finished jobs are kept for 1 hour (3600 seconds). You can change this using `--ttl-seconds-after-finished`.
 
 ```bash
-./gcluster run ... --ttl-seconds-after-finished 600 # Keep for only 10 minutes
+./gcluster job submit ... --ttl-seconds-after-finished 600 # Keep for only 10 minutes
 ```
 
 ### 8.6 Topology & Scheduler
@@ -308,15 +308,15 @@ By default, finished jobs are kept for 1 hour (3600 seconds). You can change thi
 Request a specific TPU slice topology using `--topology`.
 
 ```bash
-./gcluster run \
+./gcluster job submit \
   --project <YOUR_GCP_PROJECT_ID> \
-  --cluster-name my-test-cluster \
+  --cluster my-test-cluster \
   --cluster-region us-central1 \
-  --workload-name my-topology-job \
+  --name my-topology-job \
   --base-docker-image python:3.9-slim \
   --build-context job_details \
   --command "python app.py" \
-  --accelerator-type tpu-v6e-slice \
+  --accelerator tpu-v6e-slice \
   --topology 4x4
 ```
 
@@ -324,9 +324,9 @@ Request a specific TPU slice topology using `--topology`.
 Use a specific scheduler (e.g., `gke.io/topology-aware-auto`) using `--scheduler`.
 
 ```bash
-./gcluster run \
+./gcluster job submit \
   ... \
-  --workload-name my-scheduler-job \
+  --name my-scheduler-job \
   --scheduler gke.io/topology-aware-auto
 ```
 

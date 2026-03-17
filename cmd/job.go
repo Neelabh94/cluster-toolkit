@@ -19,10 +19,11 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(workloadCmd)
+	rootCmd.AddCommand(jobCmd)
 }
 
-var workloadCmd = &cobra.Command{
-	Use:   "workload",
-	Short: "Manage workloads (jobs) on the cluster.",
+var jobCmd = &cobra.Command{
+	Use:   "job",
+	Short: "Manage jobs on the cluster.",
+	Long:  `Manage jobs on the cluster, including submitting, listing, cancelling, and viewing logs.`,
 }

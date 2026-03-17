@@ -155,7 +155,7 @@ func NewGKEOrchestrator() (*GKEOrchestrator, error) {
 }
 
 func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
-	logging.Info("Starting gcluster run workflow...")
+	logging.Info("Starting gcluster job submit workflow...")
 
 	projectID, err := g.getProjectID(job.ProjectID)
 	if err != nil {
@@ -214,7 +214,7 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 		}
 	}
 
-	logging.Info("gcluster run workflow completed.")
+	logging.Info("gcluster job submit workflow completed.")
 	return nil
 }
 
@@ -1026,7 +1026,22 @@ func (g *GKEOrchestrator) DeleteJob(name string, opts orchestrator.DeleteOptions
 	return nil
 }
 
+func (g *GKEOrchestrator) GetJobLogs(name string, opts orchestrator.LogsOptions) (string, error) {
+	logging.Info("Fetching logs for job '%s' in cluster '%s'...", name, opts.ClusterName)
+	if err := g.configureKubectl(opts.ClusterName, opts.ClusterLocation, opts.ProjectID); err != nil {
+		return "", err
+	}
+
+	res := g.executor.ExecuteCommand("kubectl", "logs", "-l", fmt.Sprintf("gcluster.google.com/workload=%s", name), "--all-containers")
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("failed to get logs: %s\n%s", res.Stderr, res.Stdout)
+	}
+
+	return res.Stdout, nil
+}
+
 func (g *GKEOrchestrator) getDynamicClient() (dynamic.Interface, error) {
+
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	configOverrides := &clientcmd.ConfigOverrides{}
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)

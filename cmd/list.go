@@ -52,7 +52,6 @@ func init() {
 	_ = listWorkloadsCmd.MarkFlagRequired("cluster-region")
 }
 
-
 func runListWorkloads(cmd *cobra.Command, args []string) {
 	logging.Info("Listing jobs...")
 

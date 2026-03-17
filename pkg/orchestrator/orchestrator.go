@@ -68,8 +68,15 @@ type DeleteOptions struct {
 	ClusterLocation string
 }
 
+type LogsOptions struct {
+	ProjectID       string
+	ClusterName     string
+	ClusterLocation string
+}
+
 type Orchestrator interface {
 	SubmitJob(job JobDefinition) error
 	ListJobs(opts ListOptions) ([]JobStatus, error)
 	DeleteJob(name string, opts DeleteOptions) error
+	GetJobLogs(name string, opts LogsOptions) (string, error)
 }

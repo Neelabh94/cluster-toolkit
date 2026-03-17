@@ -57,53 +57,54 @@ var (
 )
 
 func init() {
-	rootCmd.AddCommand(runCmd)
+	jobCmd.AddCommand(submitCmd)
 
-	runCmd.Flags().StringVarP(&dockerImage, "docker-image", "i", "", "Name of the pre-built Docker image to run (e.g., my-project/my-image:tag).")
-	runCmd.Flags().StringVar(&baseDockerImage, "base-docker-image", "", "Name of the base Docker image for Crane to build upon (e.g., python:3.9-slim). Requires --build-context.")
-	runCmd.Flags().StringVarP(&buildContext, "build-context", "c", "", "Path to the build context directory for Crane (e.g., .). Required with --base-docker-image.")
-	runCmd.Flags().StringVarP(&commandToRun, "command", "e", "", "Command to execute in the container (e.g., 'python train.py'). Required.")
-	runCmd.Flags().StringVarP(&acceleratorType, "accelerator-type", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
-	runCmd.Flags().StringVarP(&outputManifest, "output-manifest", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
-	runCmd.Flags().StringVar(&clusterName, "cluster-name", "", "Name of the GKE cluster to deploy the workload to. Required.")
-	runCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	runCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
-	runCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the Docker image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-docker-image.")
+	submitCmd.Flags().StringVarP(&dockerImage, "image", "i", "", "Name of the pre-built Docker image to run (e.g., my-project/my-image:tag).")
+	submitCmd.Flags().StringVar(&baseDockerImage, "base-docker-image", "", "Name of the base Docker image for Crane to build upon (e.g., python:3.9-slim). Requires --build-context.")
+	submitCmd.Flags().StringVarP(&buildContext, "build-context", "c", "", "Path to the build context directory for Crane (e.g., .). Required with --base-docker-image.")
+	submitCmd.Flags().StringVarP(&commandToRun, "command", "e", "", "Command to execute in the container (e.g., 'python train.py'). Required.")
+	submitCmd.Flags().StringVarP(&acceleratorType, "accelerator", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
+	submitCmd.Flags().StringVarP(&outputManifest, "dry-run-out", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
+	submitCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster to deploy the workload to. Required.")
+	submitCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	submitCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
+	submitCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the Docker image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-docker-image.")
 
-	runCmd.Flags().StringVarP(&workloadName, "workload-name", "w", "", "Name of the workload (JobSet) to create. Required.")
-	runCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "", "Name of the Kueue LocalQueue to submit the workload to. If empty, it will be auto-discovered.")
-	runCmd.Flags().IntVar(&numSlices, "num-slices", 1, "Number of JobSet replicas (slices).")
-	runCmd.Flags().IntVar(&vmsPerSlice, "vms-per-slice", 1, "Number of VMs (pods) per slice.")
-	runCmd.Flags().IntVar(&maxRestarts, "max-restarts", 1, "Maximum number of restarts for the JobSet before failing.")
-	runCmd.Flags().IntVar(&ttlSecondsAfterFinished, "ttl-seconds-after-finished", 3600, "Time (in seconds) to retain the JobSet after it finishes.")
+	submitCmd.Flags().StringVarP(&workloadName, "name", "n", "", "Name of the workload to create. Required.")
+	submitCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "", "Name of the Kueue LocalQueue to submit the workload to. If empty, it will be auto-discovered.")
+	submitCmd.Flags().IntVar(&numSlices, "nodes", 1, "Number of JobSet replicas (nodes).")
+	submitCmd.Flags().IntVar(&vmsPerSlice, "vms-per-slice", 1, "Number of VMs (pods) per slice.")
+	submitCmd.Flags().IntVar(&maxRestarts, "max-restarts", 1, "Maximum number of restarts for the JobSet before failing.")
+	submitCmd.Flags().IntVar(&ttlSecondsAfterFinished, "ttl-seconds-after-finished", 3600, "Time (in seconds) to retain the JobSet after it finishes.")
 
-	runCmd.Flags().StringVar(&placementPolicy, "placement-policy", "", "Name of the GKE placement policy to use.")
-	runCmd.Flags().StringToStringVar(&nodeSelector, "machine-label", nil, "Key=value pairs for node labels to target specific machine types.")
-	runCmd.Flags().StringVar(&cpuAffinityStr, "cpu-affinity", "", "CPU affinity rules (e.g., 'numa').")
-	runCmd.Flags().IntSliceVar(&restartOnExitCodes, "restart-on-exit-codes", nil, "List of exit codes that should not trigger a job failure.")
-	runCmd.Flags().StringVar(&imagePullSecrets, "image-pull-secret", "", "Comma-separated list of secrets for pulling images.")
-	runCmd.Flags().StringVar(&serviceAccountName, "service-account", "", "Service account name for the pods.")
-	runCmd.Flags().StringVar(&topology, "topology", "", "TPU slice topology (e.g., 2x2x1).")
-	runCmd.Flags().StringVar(&scheduler, "scheduler", "", "Kubernetes Scheduler name (e.g., gke.io/topology-aware-auto).")
-	runCmd.Flags().BoolVar(&awaitJobCompletion, "await-job-completion", false, "If true, gcluster will wait for the submitted job to complete.")
+	submitCmd.Flags().StringVar(&placementPolicy, "placement-policy", "", "Name of the GKE placement policy to use.")
+	submitCmd.Flags().StringToStringVar(&nodeSelector, "machine-label", nil, "Key=value pairs for node labels to target specific machine types.")
+	submitCmd.Flags().StringVar(&cpuAffinityStr, "cpu-affinity", "", "CPU affinity rules (e.g., 'numa').")
+	submitCmd.Flags().IntSliceVar(&restartOnExitCodes, "restart-on-exit-codes", nil, "List of exit codes that should not trigger a job failure.")
+	submitCmd.Flags().StringVar(&imagePullSecrets, "image-pull-secret", "", "Comma-separated list of secrets for pulling images.")
+	submitCmd.Flags().StringVar(&serviceAccountName, "service-account", "", "Service account name for the pods.")
+	submitCmd.Flags().StringVar(&topology, "topology", "", "TPU slice topology (e.g., 2x2x1).")
+	submitCmd.Flags().StringVar(&scheduler, "scheduler", "", "Kubernetes Scheduler name (e.g., gke.io/topology-aware-auto).")
+	submitCmd.Flags().BoolVar(&awaitJobCompletion, "await-job-completion", false, "If true, gcluster will wait for the submitted job to complete.")
 
-	_ = runCmd.MarkFlagRequired("command")
-	_ = runCmd.MarkFlagRequired("cluster-name")
-	_ = runCmd.MarkFlagRequired("cluster-region")
+	_ = submitCmd.MarkFlagRequired("command")
+	_ = submitCmd.MarkFlagRequired("cluster")
+	_ = submitCmd.MarkFlagRequired("cluster-region")
 }
 
-var runCmd = &cobra.Command{
-	Use:   "run",
-	Short: "Runs a Docker image workload on a GKE cluster using JobSet.",
-	Long: `The 'run' command deploys a Docker image as a workload (Kubernetes JobSet)
-on a GKE cluster, integrated with Kueue. Image can be pre-built (--docker-image)
+var submitCmd = &cobra.Command{
+	Use:   "submit",
+	Short: "Submits a Docker image workload on a Gke cluster using JobSet.",
+	Long: `The 'submit' command deploys a Docker image as a workload (Kubernetes JobSet)
+on a GKE cluster, integrated with Kueue. Image can be pre-built (--image)
 or built on-the-fly using Crane (--base-docker-image with --build-context).
 
 It accepts parameters for the Docker image, command to execute, accelerator type,
-and JobSet/Kueue specific configurations like workload name, queue, slices, and restarts.`,
+and JobSet/Kueue specific configurations like workload name, queue, nodes, and restarts.`,
 	Run: runRunCmd,
+
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		logging.Info("Running prerequisite checks for 'gcluster run'...")
+		logging.Info("Running prerequisite checks for 'gcluster job submit'...")
 		err := prereq.EnsurePrerequisites(&projectID)
 		if err != nil {
 			return fmt.Errorf("prerequisite checks failed: %w", err)
@@ -115,7 +116,7 @@ and JobSet/Kueue specific configurations like workload name, queue, slices, and 
 }
 
 func runRunCmd(cmd *cobra.Command, args []string) {
-	logging.Info("Executing gcluster run command...")
+	logging.Info("Executing gcluster job submit command...")
 
 	if dockerImage == "" && baseDockerImage == "" {
 		logging.Fatal("Either --docker-image or --base-docker-image must be provided.")
@@ -164,6 +165,6 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 	}
 
 	if err := gkeOrchestrator.SubmitJob(jobDef); err != nil {
-		logging.Fatal("gcluster run failed: %v", err)
+		logging.Fatal("gcluster job submit failed: %v", err)
 	}
 }

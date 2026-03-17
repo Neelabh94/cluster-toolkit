@@ -1032,9 +1032,22 @@ func (g *GKEOrchestrator) GetJobLogs(name string, opts orchestrator.LogsOptions)
 		return "", err
 	}
 
-	res := g.executor.ExecuteCommand("kubectl", "logs", "-l", fmt.Sprintf("gcluster.google.com/workload=%s", name), "--all-containers")
+	// Check if JobSet exists
+	checkRes := g.executor.ExecuteCommand("kubectl", "get", "jobset", name)
+	if checkRes.ExitCode != 0 {
+		if strings.Contains(strings.ToLower(checkRes.Stderr), "not found") || strings.Contains(strings.ToLower(checkRes.Stdout), "notfound") {
+			return "", fmt.Errorf("job '%s' not found on cluster (it may have been cancelled or deleted)", name)
+		}
+		return "", fmt.Errorf("failed to verify job existence: %s", checkRes.Stderr)
+	}
+
+	res := g.executor.ExecuteCommand("kubectl", "logs", "-l", fmt.Sprintf("jobset.sigs.k8s.io/jobset-name=%s", name), "--all-containers")
 	if res.ExitCode != 0 {
 		return "", fmt.Errorf("failed to get logs: %s\n%s", res.Stderr, res.Stdout)
+	}
+
+	if strings.TrimSpace(res.Stdout) == "" {
+		return "Job exists but has no live logs available (it may have finished or failed to start pods)", nil
 	}
 
 	return res.Stdout, nil

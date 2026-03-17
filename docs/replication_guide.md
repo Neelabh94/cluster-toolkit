@@ -210,7 +210,7 @@ Verify that the Kubernetes JobSet ran successfully on your GKE cluster.
 
 ## 8. Verify Phase 2 Features (Advanced Scheduling & Lifecycle)
 
-Phase 2 introduces job lifecycle management (`job list`, `job cancel`) and advanced scheduling flags.
+Phase 2 introduces job lifecycle management (`job list`, `job cancel`, `job logs`) and advanced scheduling flags.
 
 ### 8.1 List Jobs
 
@@ -225,7 +225,18 @@ You can now list the status of jobs directly through `gcluster`.
 
 You should see a table output with `NAME`, `STATUS`, `CREATION_TIME`, and `COMPLETION_TIME`.
 
-### 8.2 Run with Advanced Scheduling Flags
+### 8.2 Inspect Logs
+
+You can view the logs of your submitted job directly with `gcluster job logs`.
+
+```bash
+./gcluster job logs <job-name> \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster my-test-cluster \
+  --cluster-region us-central1
+```
+
+This will fetch and print output logs from all containers in the job pods.
 
 ### 8.3 Run with Advanced Scheduling Flags
 

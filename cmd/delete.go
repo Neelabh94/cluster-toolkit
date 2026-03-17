@@ -45,7 +45,6 @@ func runCancelJob(cmd *cobra.Command, args []string) {
 	jobName := args[0]
 	logging.Info("Cancelling job %s...", jobName)
 
-
 	orc, err := gke.NewGKEOrchestrator()
 	if err != nil {
 		logging.Fatal("Failed to create orchestrator: %v", err)

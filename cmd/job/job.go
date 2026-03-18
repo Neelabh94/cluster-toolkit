@@ -12,18 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cmd
+package job
 
 import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	rootCmd.AddCommand(jobCmd)
-}
-
-var jobCmd = &cobra.Command{
+// JobCmd represents the base command for job-related operations
+var JobCmd = &cobra.Command{
 	Use:   "job",
 	Short: "Manage jobs on the cluster.",
 	Long:  `Manage jobs on the cluster, including submitting, listing, cancelling, and viewing logs.`,
+}
+
+func init() {
+	JobCmd.AddCommand(SubmitCmd)
+	JobCmd.AddCommand(CancelJobCmd)
+	JobCmd.AddCommand(ListWorkloadsCmd)
+	JobCmd.AddCommand(LogsCmd)
 }

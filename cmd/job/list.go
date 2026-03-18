@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cmd
+package job
 
 import (
 	"fmt"
@@ -31,7 +31,7 @@ var (
 	filterName   string
 )
 
-var listWorkloadsCmd = &cobra.Command{
+var ListWorkloadsCmd = &cobra.Command{
 	Use:          "list",
 	Short:        "List workloads (jobs) in the cluster.",
 	Run:          runListWorkloads,
@@ -39,17 +39,15 @@ var listWorkloadsCmd = &cobra.Command{
 }
 
 func init() {
-	jobCmd.AddCommand(listWorkloadsCmd)
+	ListWorkloadsCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
+	ListWorkloadsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	ListWorkloadsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
 
-	listWorkloadsCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
-	listWorkloadsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	listWorkloadsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
+	ListWorkloadsCmd.Flags().StringVar(&filterStatus, "status", "", "Filter jobs by status (e.g. Running, Failed, Succeeded).")
+	ListWorkloadsCmd.Flags().StringVar(&filterName, "name-contains", "", "Filter jobs by name.")
 
-	listWorkloadsCmd.Flags().StringVar(&filterStatus, "status", "", "Filter jobs by status (e.g. Running, Failed, Succeeded).")
-	listWorkloadsCmd.Flags().StringVar(&filterName, "name-contains", "", "Filter jobs by name.")
-
-	_ = listWorkloadsCmd.MarkFlagRequired("cluster")
-	_ = listWorkloadsCmd.MarkFlagRequired("cluster-region")
+	_ = ListWorkloadsCmd.MarkFlagRequired("cluster")
+	_ = ListWorkloadsCmd.MarkFlagRequired("cluster-region")
 }
 
 func runListWorkloads(cmd *cobra.Command, args []string) {
@@ -74,9 +72,9 @@ func runListWorkloads(cmd *cobra.Command, args []string) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTATUS\tCREATION_TIME\tCOMPLETION_TIME")
+	fmt.Fprintln(w, "NAME	STATUS	CREATION_TIME	COMPLETION_TIME")
 	for _, job := range jobs {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", job.Name, job.Status, job.CreationTime, job.CompletionTime)
+		fmt.Fprintf(w, "%s	%s	%s	%s", job.Name, job.Status, job.CreationTime, job.CompletionTime)
 	}
 	w.Flush()
 }

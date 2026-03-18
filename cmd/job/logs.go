@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cmd
+package job
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var logsCmd = &cobra.Command{
+var LogsCmd = &cobra.Command{
 	Use:   "logs [job-name]",
 	Short: "Fetch logs for a job in the cluster.",
 	Args:  cobra.ExactArgs(1),
@@ -31,14 +31,12 @@ var logsCmd = &cobra.Command{
 }
 
 func init() {
-	jobCmd.AddCommand(logsCmd)
+	LogsCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
+	LogsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	LogsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
 
-	logsCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
-	logsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	logsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
-
-	_ = logsCmd.MarkFlagRequired("cluster")
-	_ = logsCmd.MarkFlagRequired("cluster-region")
+	_ = LogsCmd.MarkFlagRequired("cluster")
+	_ = LogsCmd.MarkFlagRequired("cluster-region")
 }
 
 func runLogsCmd(cmd *cobra.Command, args []string) {

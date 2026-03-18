@@ -25,8 +25,8 @@ import (
 )
 
 var (
-	dockerImage     string
-	baseDockerImage string
+	imageName       string
+	baseImage       string
 	buildContext    string
 	commandToRun    string
 	acceleratorType string
@@ -59,12 +59,12 @@ var (
 
 var SubmitCmd = &cobra.Command{
 	Use:   "submit",
-	Short: "Submits a Docker image workload on a Gke cluster using JobSet.",
-	Long: `The 'submit' command deploys a Docker image as a workload (Kubernetes JobSet)
+	Short: "Submits a container image workload on a Gke cluster using JobSet.",
+	Long: `The 'submit' command deploys a container image as a workload (Kubernetes JobSet)
 on a GKE cluster, integrated with Kueue. Image can be pre-built (--image)
-or built on-the-fly using Crane (--base-docker-image with --build-context).
+or built on-the-fly using Crane (--base-image with --build-context).
 
-It accepts parameters for the Docker image, command to execute, accelerator type,
+It accepts parameters for the container image, command to execute, accelerator type,
 and JobSet/Kueue specific configurations like workload name, queue, nodes, and restarts.`,
 	Run: runSubmitCmd,
 
@@ -94,16 +94,16 @@ and JobSet/Kueue specific configurations like workload name, queue, nodes, and r
 }
 
 func init() {
-	SubmitCmd.Flags().StringVarP(&dockerImage, "image", "i", "", "Name of the pre-built Docker image to run (e.g., my-project/my-image:tag).")
-	SubmitCmd.Flags().StringVar(&baseDockerImage, "base-docker-image", "", "Name of the base Docker image for Crane to build upon (e.g., python:3.9-slim). Requires --build-context.")
-	SubmitCmd.Flags().StringVarP(&buildContext, "build-context", "c", "", "Path to the build context directory for Crane (e.g., .). Required with --base-docker-image.")
+	SubmitCmd.Flags().StringVarP(&imageName, "image", "i", "", "Name of the pre-built container image to run (e.g., my-project/my-image:tag).")
+	SubmitCmd.Flags().StringVar(&baseImage, "base-image", "", "Name of the base image for Crane to build upon (e.g., python:3.9-slim). Requires --build-context.")
+	SubmitCmd.Flags().StringVarP(&buildContext, "build-context", "c", "", "Path to the build context directory for Crane (e.g., .). Required with --base-image.")
 	SubmitCmd.Flags().StringVarP(&commandToRun, "command", "e", "", "Command to execute in the container (e.g., 'python train.py'). Required.")
 	SubmitCmd.Flags().StringVarP(&acceleratorType, "accelerator", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
 	SubmitCmd.Flags().StringVarP(&outputManifest, "dry-run-out", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
 	SubmitCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster to deploy the workload to. Required.")
 	SubmitCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
 	SubmitCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
-	SubmitCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the Docker image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-docker-image.")
+	SubmitCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-image.")
 
 	SubmitCmd.Flags().StringVarP(&workloadName, "name", "n", "", "Name of the workload to create. Required.")
 	SubmitCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "", "Name of the Kueue LocalQueue to submit the workload to. If empty, it will be auto-discovered.")
@@ -131,22 +131,22 @@ func init() {
 func runSubmitCmd(cmd *cobra.Command, args []string) {
 	logging.Info("Executing gcluster job submit command...")
 
-	if dockerImage == "" && baseDockerImage == "" {
-		logging.Fatal("Either --docker-image or --base-docker-image must be provided.")
+	if imageName == "" && baseImage == "" {
+		logging.Fatal("Either --image or --base-image must be provided.")
 	}
-	if dockerImage != "" && baseDockerImage != "" {
-		logging.Fatal("Cannot provide both --docker-image and --base-docker-image.")
+	if imageName != "" && baseImage != "" {
+		logging.Fatal("Cannot provide both --image and --base-image.")
 	}
-	if dockerImage != "" && buildContext != "" {
-		logging.Fatal("--build-context cannot be provided when --docker-image is used as no build is performed.")
+	if imageName != "" && buildContext != "" {
+		logging.Fatal("--build-context cannot be provided when --image is used as no build is performed.")
 	}
-	if baseDockerImage != "" && buildContext == "" {
-		logging.Fatal("A --build-context must be provided when --base-docker-image is used for a Crane build.")
+	if baseImage != "" && buildContext == "" {
+		logging.Fatal("A --build-context must be provided when --base-image is used for a Crane build.")
 	}
 
 	jobDef := orchestrator.JobDefinition{
-		DockerImage:             dockerImage,
-		BaseDockerImage:         baseDockerImage,
+		ImageName:               imageName,
+		BaseImage:               baseImage,
 		BuildContext:            buildContext,
 		Platform:                platform,
 		CommandToRun:            commandToRun,

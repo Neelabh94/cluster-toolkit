@@ -15,8 +15,8 @@
 package orchestrator
 
 type JobDefinition struct {
-	DockerImage     string
-	BaseDockerImage string
+	ImageName       string
+	BaseImage       string
 	BuildContext    string
 	Platform        string
 	CommandToRun    string

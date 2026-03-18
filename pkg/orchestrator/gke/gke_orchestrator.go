@@ -175,7 +175,7 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 		return fmt.Errorf("failed to check or install Kueue: %w", err)
 	}
 
-	fullImageName, err := g.buildDockerImage(job.ProjectID, job.BaseDockerImage, job.BuildContext, job.Platform, job.DockerImage)
+	fullImageName, err := g.buildContainerImage(job.ProjectID, job.BaseImage, job.BuildContext, job.Platform, job.ImageName)
 	if err != nil {
 		return err
 	}
@@ -394,9 +394,9 @@ func (g *GKEOrchestrator) resolveAcceleratorType(requested string) (string, erro
 	return uniqueAccels[0], nil
 }
 
-func (g *GKEOrchestrator) buildDockerImage(project, baseDockerImage, buildContext, platformStr, dockerImage string) (string, error) {
-	if baseDockerImage != "" {
-		logging.Info("Building Docker image using Crane (Go implementation) on top of %s...", baseDockerImage)
+func (g *GKEOrchestrator) buildContainerImage(project, baseImage, buildContext, platformStr, imageName string) (string, error) {
+	if baseImage != "" {
+		logging.Info("Building container image using Crane (Go implementation) on top of %s...", baseImage)
 
 		ignorePatterns := []string{
 			".git", ".terraform", ".ghpc", ".ansible", "vendor", "bin", "pkg", "node_modules", "*.log", "tmp/", ".DS_Store", "__pycache__",
@@ -409,7 +409,7 @@ func (g *GKEOrchestrator) buildDockerImage(project, baseDockerImage, buildContex
 
 		fullImageName, err := imagebuilder.BuildContainerImageFromBaseImage(
 			project,
-			baseDockerImage,
+			baseImage,
 			buildContext,
 			platformStr,
 			ignoreMatcher,
@@ -419,11 +419,11 @@ func (g *GKEOrchestrator) buildDockerImage(project, baseDockerImage, buildContex
 		}
 		logging.Info("Built image will be available at: %s", fullImageName)
 		return fullImageName, nil
-	} else if dockerImage != "" {
-		logging.Info("Using pre-existing Docker image: %s", dockerImage)
-		return dockerImage, nil
+	} else if imageName != "" {
+		logging.Info("Using pre-existing container image: %s", imageName)
+		return imageName, nil
 	} else {
-		return "", fmt.Errorf("internal error: neither --docker-image nor --base-docker-image was provided, but CLI validation should have caught this")
+		return "", fmt.Errorf("internal error: neither --image nor --base-image was provided, but CLI validation should have caught this")
 	}
 }
 

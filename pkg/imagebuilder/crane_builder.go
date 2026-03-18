@@ -50,7 +50,7 @@ const (
 // to a base Docker image.
 func BuildContainerImageFromBaseImage(
 	project string,
-	baseDockerImage string,
+	baseImage string,
 	scriptDir string,
 	platformStr string,
 	ignoreMatcher *patternmatcher.PatternMatcher,
@@ -70,7 +70,7 @@ func BuildContainerImageFromBaseImage(
 	imageName := fmt.Sprintf("gcr.io/%s/%s-runner:%s-%s", project, userName, tagRandomPrefix, tagDatetime)
 
 	logrus.Infof("Starting image build process for %s", imageName)
-	logrus.Infof("Base Docker Image: %s", baseDockerImage)
+	logrus.Infof("Base Image: %s", baseImage)
 	logrus.Infof("Script Directory: %s", scriptDir)
 	logrus.Infof("Target Platform: %s/%s", platform.OS, platform.Architecture) // Corrected
 
@@ -100,15 +100,15 @@ func BuildContainerImageFromBaseImage(
 	}
 
 	// 3. Pull the base image.
-	baseRef, err := name.ParseReference(baseDockerImage)
+	baseRef, err := name.ParseReference(baseImage)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse base image reference %q: %w", baseDockerImage, err)
+		return "", fmt.Errorf("failed to parse base image reference %q: %w", baseImage, err)
 	}
 
 	// Correctly pass a pointer to v1.Platform
 	baseImg, err := crane.Pull(baseRef.String(), crane.WithPlatform(&platform)) // Corrected, pass platform directly
 	if err != nil {
-		return "", fmt.Errorf("failed to pull base image %q: %w", baseDockerImage, err)
+		return "", fmt.Errorf("failed to pull base image %q: %w", baseImage, err)
 	}
 
 	// 4. Append the new layer to the base image.

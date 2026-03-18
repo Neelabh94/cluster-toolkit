@@ -1143,7 +1143,7 @@ func (g *GKEOrchestrator) ListJobs(opts orchestrator.ListOptions) ([]orchestrato
 	return jobs, nil
 }
 
-func (g *GKEOrchestrator) DeleteJob(name string, opts orchestrator.DeleteOptions) error {
+func (g *GKEOrchestrator) CancelJob(name string, opts orchestrator.CancelOptions) error {
 	logging.Info("Deleting job '%s' in cluster '%s'...", name, opts.ClusterName)
 	if err := g.configureKubectl(opts.ClusterName, opts.ClusterLocation, opts.ProjectID); err != nil {
 		return err

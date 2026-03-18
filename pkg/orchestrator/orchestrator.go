@@ -63,7 +63,7 @@ type ListOptions struct {
 	NameContains string
 }
 
-type DeleteOptions struct {
+type CancelOptions struct {
 	ProjectID       string
 	ClusterName     string
 	ClusterLocation string
@@ -78,6 +78,6 @@ type LogsOptions struct {
 type Orchestrator interface {
 	SubmitJob(job JobDefinition) error
 	ListJobs(opts ListOptions) ([]JobStatus, error)
-	DeleteJob(name string, opts DeleteOptions) error
+	CancelJob(name string, opts CancelOptions) error
 	GetJobLogs(name string, opts LogsOptions) (string, error)
 }

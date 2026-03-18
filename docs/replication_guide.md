@@ -12,7 +12,7 @@ However, a few foundational components are still assumed or require your initial
 * **Google Cloud SDK (`gcloud`):** While `gcluster job submit` will guide you through authentication and project configuration, the `gcloud` CLI tool itself must be installed and available in your system's PATH. Download and install it from [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install).
   * **Manual Authentication:** For interactive steps like `gcloud auth login` or `gcloud auth application-default login`, `gcluster job submit` will detect if you are unauthenticated and provide instructions to run these commands manually in your terminal. This is because these commands typically require browser interaction that cannot be automated.
 * **A GCP Project:** You will need a Google Cloud Project with billing enabled and necessary APIs enabled (e.g., Kubernetes Engine API, Artifact Registry API, Cloud Resource Manager API). `gcluster job submit` will prompt you to set a default project if none is configured and will automatically enable necessary APIs like Artifact Registry.
-* **Docker:** While `gcluster job submit` uses Crane internally for image building, having Docker installed can be useful for debugging or local image development. `gcluster job submit` will configure Docker credential helpers for Google Container Registry and Artifact Registry automatically.
+* **Docker:** While `gcluster job submit` uses Crane internally for image building, having Docker installed can be useful for debugging or local container image development. `gcluster job submit` will configure container credential helpers for Google Container Registry and Artifact Registry automatically.
 * **`make`:** (Usually pre-installed on Linux/macOS, or install via package manager).
 
 ### Automated Prerequisite Checks Overview
@@ -30,8 +30,9 @@ When you run `gcluster job submit` for the first time, or if its cached state is
   * Checks if `kubectl` is installed.
   * If not, it will prompt you to install it via `gcloud components install kubectl`.
   * If `gcloud components install kubectl` fails (e.g., component manager disabled), it will offer to install `kubectl` via `sudo apt-get install kubectl` (for Debian/Ubuntu systems).
-* **Docker Credential Helper:** Configures Docker to authenticate to Google Container Registry and Artifact Registry.
+* **Container Credential Helper:** Configures Docker to authenticate to Google Container Registry and Artifact Registry.
 * **Artifact Registry API:** Ensures `artifactregistry.googleapis.com` is enabled for your project, enabling it automatically if necessary.
+* **Kueue Installation:** Checks if Kueue is installed on the cluster. If not, it automatically installs Kueue and configures necessary resources like PriorityClasses, ClusterQueue, and LocalQueue.
 
 **State Persistence:** To avoid redundant checks, `gcluster job submit` saves the successful prerequisite status in `~/.gcluster-job/prereq_state.json`. Checks will only be re-run if this state is older than 24 hours or if you specify a different GCP project.
 
@@ -121,22 +122,22 @@ For this example, we'll deploy a basic GKE cluster using the `hpc-gke.yaml` blue
 
 ## 6. `gcluster job submit` Command Reference
 
-The `gcluster job submit` command deploys a Docker image as a job (Kubernetes JobSet) on a GKE cluster, integrated with Kueue. It can use pre-built images or build images on-the-fly using Crane.
+The `gcluster job submit` command deploys a container image as a job (Kubernetes JobSet) on a GKE cluster, integrated with Kueue. It can use pre-built images or build images on-the-fly using Crane.
 
 ### Supported Flags
 
 Here are the flags currently supported by `gcluster job submit`:
 
-* `-i, --image string`: Name of a pre-built Docker image to run (e.g., `my-project/my-image:tag`). Use this if your image is already pushed to a registry.
-* `--base-docker-image string`: Name of the base Docker image for Crane to build upon (e.g., `python:3.9-slim`). Required when using `--build-context` for an on-the-fly build.
-* `-c, --build-context string`: Path to the build context directory for Crane (e.g., `./job_details`). Required with `--base-docker-image`. Crane will automatically look for a `Dockerfile` within this directory.
+* `-i, --image string`: Name of a pre-built container image to run (e.g., `my-project/my-image:tag`). Use this if your image is already pushed to a registry.
+* `--base-image string`: Name of the base container image for Crane to build upon (e.g., `python:3.9-slim`). Required when using `--build-context` for an on-the-fly build.
+* `-c, --build-context string`: Path to the build context directory for Crane (e.g., `./job_details`). Required with `--base-image`. Crane will automatically look for a `Dockerfile` within this directory.
 * `-e, --command string`: Command to execute in the container (e.g., `'python app.py'`). This overrides the `CMD` instruction in your `Dockerfile`. (Required)
 * `-a, --accelerator string`: Type of accelerator to request (e.g., `'nvidia-h100-mega-80gb'`). If empty, `gcluster job submit` will auto-discover the optimal accelerator available on the cluster nodes. (Optional)
 * `-o, --dry-run-out string`: Path to output the generated Kubernetes manifest instead of applying it directly to the cluster. Useful for inspection.
 * `--cluster string`: Name of the GKE cluster to deploy the job to. (Required)
 * `--cluster-region string`: Region of the GKE cluster. (Required)
 * `-p, --project string`: Google Cloud Project ID. If not provided, it will be inferred from your `gcloud` configuration.
-* `-f, --platform string`: Target platform for the Docker image build (e.g., `'linux/amd64'`, `'linux/arm64'`). Used with `--base-docker-image`. (Default: `linux/amd64`)
+* `-f, --platform string`: Target platform for the image build (e.g., `linux/amd64`, `linux/arm64`). Used with `--base-image`. (Default: `linux/amd64`)
 * `-w, --name string`: Name of the job (JobSet) to create. This name will be used for Kubernetes resources. (Required)
 * `--kueue-queue string`: Name of the Kueue LocalQueue to submit the job to. (Default: Auto-discovered from the cluster)
 * `--nodes int`: Number of JobSet replicas (slices). (Default: `1`)
@@ -146,7 +147,7 @@ Here are the flags currently supported by `gcluster job submit`:
 
 ## 7. Submit the Sample Job with `gcluster job submit`
 
-Now that the cluster is deployed and your application code is prepared, you can submit your sample Python script as a JobSet job. `gcluster job submit` will automatically build your Docker image using Crane and push it to Artifact Registry (or Container Registry) in your project.
+Now that the cluster is deployed and your application code is prepared, you can submit your sample Python script as a JobSet job. `gcluster job submit` will automatically build your container image using Crane and push it to Artifact Registry (or Container Registry) in your project.
 
 ### Unified Job Submission
 
@@ -159,7 +160,7 @@ Because `gcluster job submit` features auto-discovery, you can use the exact sam
       --project <YOUR_GCP_PROJECT_ID> \
       --cluster my-test-cluster \
       --cluster-region us-central1 \
-      --base-docker-image python:3.9-slim \
+      --base-image python:3.9-slim \
       --build-context job_details \
       --command "python app.py" \
       --name my-python-app-job
@@ -171,7 +172,7 @@ Because `gcluster job submit` features auto-discovery, you can use the exact sam
     1. Verify/install the JobSet CRD on your cluster.
     2. Auto-discover the Kueue LocalQueue name from the cluster.
     3. Auto-discover the hardware Accelerator Type installed on the cluster nodes and map the necessary resource requests.
-    4. Build a Docker image from `job_details/Dockerfile` using `python:3.9-slim` as the base, and push it to Artifact Registry.
+    4. Build a container image from `job_details/Dockerfile` using `python:3.9-slim` as the base, and push it to Artifact Registry.
     5. Generate and apply an intelligently configured Kubernetes JobSet manifest to your `my-test-cluster`.
 
 ## 8. Verify the Job
@@ -250,7 +251,7 @@ Use `--machine-label` to target specific hardware (e.g., C2 nodes).
   --project <YOUR_GCP_PROJECT_ID> \
   --cluster my-test-cluster \
   --cluster-region us-central1 \
-  --base-docker-image python:3.9-slim \
+  --base-image python:3.9-slim \
   --build-context job_details \
   --command "python app.py" \
   --name my-machine-job \
@@ -292,7 +293,24 @@ Use `--image-pull-secret` and `--service-account` for secure jobs.
   --service-account "my-workload-sa"
 ```
 
-### 8.4 Delete Jobs
+**Example 5: Explicit Kueue Queue Selection**
+Use `--kueue-queue` to submit the job to a specific Kueue LocalQueue.
+
+```bash
+./gcluster job submit \
+  --project <YOUR_GCP_PROJECT_ID> \
+  --cluster my-test-cluster \
+  --cluster-region us-central1 \
+  --base-image python:3.9-slim \
+  --build-context job_details \
+  --command "python app.py" \
+  --name my-kueue-job \
+  --kueue-queue "my-local-queue"
+```
+
+(Note: You would need to ensure a Kueue `LocalQueue` named `my-local-queue` is configured on your cluster.)
+
+### 8.4 Cancel Jobs
 
 You can clean up specific job without destroying the entire cluster.
 
@@ -324,7 +342,7 @@ Request a specific TPU slice topology using `--topology`.
   --cluster my-test-cluster \
   --cluster-region us-central1 \
   --name my-topology-job \
-  --base-docker-image python:3.9-slim \
+  --base-image python:3.9-slim \
   --build-context job_details \
   --command "python app.py" \
   --accelerator tpu-v6e-slice \

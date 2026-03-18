@@ -76,6 +76,9 @@ spec:
 {{- if .SchedulerName }}
               schedulerName: {{.SchedulerName}}
 {{- end }}
+{{- if .PriorityClassName }}
+              priorityClassName: {{.PriorityClassName}}
+{{- end }}
               restartPolicy: Never
               containers:
               - name: workload-container
@@ -132,6 +135,7 @@ type ManifestOptions struct {
 	SchedulerName           string
 	Tolerations             string
 	AwaitJobCompletion      bool
+	PriorityClassName       string
 }
 
 type Executor interface {
@@ -157,39 +161,18 @@ func NewGKEOrchestrator() (*GKEOrchestrator, error) {
 func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 	logging.Info("Starting gcluster job submit workflow...")
 
-	projectID, err := g.getProjectID(job.ProjectID)
+	var err error
+	job, err = g.initializeJobSubmission(job)
 	if err != nil {
 		return err
 	}
-	job.ProjectID = projectID
-
-	logging.Info("Configuring kubectl for GKE cluster '%s'...", job.ClusterName)
-	err = g.configureKubectl(job.ClusterName, job.ClusterLocation, job.ProjectID)
-	if err != nil {
-		return err
-	}
-
-	localQueue, err := g.resolveKueueQueue(job.KueueQueueName)
-	if err != nil {
-		logging.Info("Warning: Failed to auto-discover Kueue Queue Name: %v. Falling back to default-queue.", err)
-		localQueue = "default-queue"
-	}
-	job.KueueQueueName = localQueue
-
-	logging.Info("Ensuring Kueue ClusterQueue covers all requested resources...")
-	if err := g.ensureClusterQueueCoverage(job.KueueQueueName); err != nil {
-		logging.Info("Warning: Could not automatically update ClusterQueue: %v. Workload might remain suspended.", err)
-	}
-
-	accelType, err := g.resolveAcceleratorType(job.AcceleratorType)
-	if err != nil {
-		logging.Info("Warning: Failed to auto-discover Accelerator Type: %v. Assuming CPU-only.", err)
-		accelType = ""
-	}
-	job.AcceleratorType = accelType
 
 	if err := g.checkAndInstallJobSetCRD(); err != nil {
 		return fmt.Errorf("failed to check or install JobSet CRD: %w", err)
+	}
+
+	if err := g.checkAndInstallKueue(); err != nil {
+		return fmt.Errorf("failed to check or install Kueue: %w", err)
 	}
 
 	fullImageName, err := g.buildDockerImage(job.ProjectID, job.BaseDockerImage, job.BuildContext, job.Platform, job.DockerImage)
@@ -216,6 +199,41 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 
 	logging.Info("gcluster job submit workflow completed.")
 	return nil
+}
+
+func (g *GKEOrchestrator) initializeJobSubmission(job orchestrator.JobDefinition) (orchestrator.JobDefinition, error) {
+	projectID, err := g.getProjectID(job.ProjectID)
+	if err != nil {
+		return job, err
+	}
+	job.ProjectID = projectID
+
+	logging.Info("Configuring kubectl for GKE cluster '%s'...", job.ClusterName)
+	err = g.configureKubectl(job.ClusterName, job.ClusterLocation, job.ProjectID)
+	if err != nil {
+		return job, err
+	}
+
+	localQueue, err := g.resolveKueueQueue(job.KueueQueueName)
+	if err != nil {
+		logging.Info("Warning: Failed to auto-discover Kueue Queue Name: %v. Falling back to default-queue.", err)
+		localQueue = "default-queue"
+	}
+	job.KueueQueueName = localQueue
+
+	logging.Info("Ensuring Kueue ClusterQueue covers all requested resources...")
+	if err := g.ensureClusterQueueCoverage(localQueue); err != nil {
+		logging.Info("Warning: Could not automatically update ClusterQueue: %v. Workload might remain suspended.", err)
+	}
+
+	accelType, err := g.resolveAcceleratorType(job.AcceleratorType)
+	if err != nil {
+		logging.Info("Warning: Failed to auto-discover Accelerator Type: %v. Assuming CPU-only.", err)
+		accelType = ""
+	}
+	job.AcceleratorType = accelType
+
+	return job, nil
 }
 
 func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) error {
@@ -459,6 +477,123 @@ func (g *GKEOrchestrator) checkAndInstallJobSetCRD() error {
 
 	jobSetManifestsURL := "https://github.com/kubernetes-sigs/jobset/releases/download/v0.10.1/manifests.yaml"
 	return g.installJobSetCRD(jobSetManifestsURL)
+}
+
+func (g *GKEOrchestrator) checkAndInstallKueue() error {
+	kueueInstalled, err := g.isKueueInstalled()
+	if err != nil {
+		return err
+	}
+
+	if !kueueInstalled {
+		logging.Info("Kueue not found. Installing Kueue...")
+		return g.installKueue()
+	}
+
+	priorityClassesInstalled, err := g.arePriorityClassesInstalled()
+	if err != nil {
+		return err
+	}
+
+	if !priorityClassesInstalled {
+		logging.Info("Required PriorityClasses not found. Installing them...")
+		return g.installKueueResources()
+	}
+
+	logging.Info("Kueue and required PriorityClasses are already installed.")
+	return nil
+}
+
+func (g *GKEOrchestrator) isKueueInstalled() (bool, error) {
+	logging.Info("Checking for Kueue installation...")
+	res := g.executor.ExecuteCommand("kubectl", "get", "crd", "clusterqueues.kueue.x-k8s.io")
+	if res.ExitCode == 0 {
+		logging.Info("Kueue CRD found.")
+		return true, nil
+	}
+	if strings.Contains(res.Stderr, "not found") || strings.Contains(res.Stdout, "NotFound") {
+		logging.Info("Kueue CRD not found.")
+		return false, nil
+	}
+	return false, fmt.Errorf("failed to check for Kueue CRD: %s\n%s", res.Stderr, res.Stdout)
+}
+
+func (g *GKEOrchestrator) arePriorityClassesInstalled() (bool, error) {
+	logging.Info("Checking for PriorityClass installation...")
+	priorityClasses := []string{"very-low", "low", "medium", "high"}
+	for _, pc := range priorityClasses {
+		res := g.executor.ExecuteCommand("kubectl", "get", "priorityclass", pc)
+		if res.ExitCode != 0 {
+			if strings.Contains(res.Stderr, "not found") || strings.Contains(res.Stdout, "NotFound") {
+				logging.Info("PriorityClass %s not found.", pc)
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to check for PriorityClass %s: %s\n%s", pc, res.Stderr, res.Stdout)
+		}
+	}
+	return true, nil
+}
+
+func (g *GKEOrchestrator) installKueue() error {
+	logging.Info("Installing Kueue...")
+	kueueManifestsURL := "https://github.com/kubernetes-sigs/kueue/releases/download/v0.6.3/manifests.yaml"
+	manifestBytes, err := g.downloadJobSetManifests(kueueManifestsURL)
+	if err != nil {
+		return err
+	}
+
+	if err := g.applyJobSetManifests(manifestBytes); err != nil {
+		return err
+	}
+
+	logging.Info("Kueue components applied successfully.")
+	return g.installKueueResources()
+}
+
+func (g *GKEOrchestrator) installKueueResources() error {
+	logging.Info("Installing Kueue resources (PriorityClasses, ClusterQueue, LocalQueue)...")
+
+	// Install PriorityClasses
+	priorityClassesTmpl, err := template.ParseFiles("pkg/orchestrator/gke/templates/priority_classes.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse priority_classes.tmpl: %w", err)
+	}
+	var priorityClassesBuf bytes.Buffer
+	if err := priorityClassesTmpl.Execute(&priorityClassesBuf, nil); err != nil {
+		return fmt.Errorf("failed to execute priority_classes.tmpl template: %w", err)
+	}
+	if err := g.applyJobSetManifests(priorityClassesBuf.Bytes()); err != nil {
+		return err
+	}
+
+	// Install ClusterQueue
+	clusterQueueTmpl, err := template.ParseFiles("pkg/orchestrator/gke/templates/cluster_queue.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse cluster_queue.tmpl: %w", err)
+	}
+	var clusterQueueBuf bytes.Buffer
+	if err := clusterQueueTmpl.Execute(&clusterQueueBuf, nil); err != nil {
+		return fmt.Errorf("failed to execute cluster_queue.tmpl template: %w", err)
+	}
+	if err := g.applyJobSetManifests(clusterQueueBuf.Bytes()); err != nil {
+		return err
+	}
+
+	// Install LocalQueue
+	localQueueTmpl, err := template.ParseFiles("pkg/orchestrator/gke/templates/local_queue.tmpl")
+	if err != nil {
+		return fmt.Errorf("failed to parse local_queue.tmpl: %w", err)
+	}
+	var localQueueBuf bytes.Buffer
+	if err := localQueueTmpl.Execute(&localQueueBuf, struct{ Namespace string }{"default"}); err != nil {
+		return fmt.Errorf("failed to execute local_queue.tmpl template: %w", err)
+	}
+	if err := g.applyJobSetManifests(localQueueBuf.Bytes()); err != nil {
+		return err
+	}
+
+	logging.Info("Kueue resources installed successfully.")
+	return nil
 }
 
 func (g *GKEOrchestrator) installJobSetCRD(jobSetManifestsURL string) error {
@@ -777,6 +912,7 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, update
 		TopologyAnnotation      string
 		SchedulerName           string
 		Tolerations             string
+		PriorityClassName       string
 	}{
 		WorkloadName:            opts.WorkloadName,
 		KueueQueueName:          opts.KueueQueueName,
@@ -795,6 +931,7 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, update
 		TopologyAnnotation:      opts.TopologyAnnotation,
 		SchedulerName:           opts.SchedulerName,
 		Tolerations:             opts.Tolerations,
+		PriorityClassName:       opts.PriorityClassName,
 	}
 }
 
@@ -873,6 +1010,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		SchedulerName:           job.Scheduler,
 		Tolerations:             tolerationsStr,
 		AwaitJobCompletion:      job.AwaitJobCompletion,
+		PriorityClassName:       job.PriorityClassName,
 	}, nil
 }
 

@@ -54,6 +54,7 @@ var (
 	platform           string
 
 	awaitJobCompletion bool
+	priorityClassName  string
 )
 
 func init() {
@@ -86,6 +87,7 @@ func init() {
 	submitCmd.Flags().StringVar(&topology, "topology", "", "TPU slice topology (e.g., 2x2x1).")
 	submitCmd.Flags().StringVar(&scheduler, "scheduler", "", "Kubernetes Scheduler name (e.g., gke.io/topology-aware-auto).")
 	submitCmd.Flags().BoolVar(&awaitJobCompletion, "await-job-completion", false, "If true, gcluster will wait for the submitted job to complete.")
+	submitCmd.Flags().StringVar(&priorityClassName, "priority", "medium", "A priority, one of `very-low`, `low`, `medium`, `high` or `very-high`. Defaults to `medium`.")
 
 	_ = submitCmd.MarkFlagRequired("command")
 	_ = submitCmd.MarkFlagRequired("cluster")
@@ -109,6 +111,19 @@ and JobSet/Kueue specific configurations like workload name, queue, nodes, and r
 		if err != nil {
 			return fmt.Errorf("prerequisite checks failed: %w", err)
 		}
+
+		allowedPriorities := map[string]bool{
+			"very-low":  true,
+			"low":       true,
+			"medium":    true,
+			"high":      true,
+			"very-high": true,
+		}
+
+		if priorityClassName != "" && !allowedPriorities[priorityClassName] {
+			return fmt.Errorf("invalid value for --priority: %s. Allowed values are: very-low, low, medium, high, very-high", priorityClassName)
+		}
+
 		logging.Info("Prerequisite checks completed successfully.")
 		return nil
 	},
@@ -157,6 +172,7 @@ func runRunCmd(cmd *cobra.Command, args []string) {
 		Topology:                topology,
 		Scheduler:               scheduler,
 		AwaitJobCompletion:      awaitJobCompletion,
+		PriorityClassName:       priorityClassName,
 	}
 
 	gkeOrchestrator, err := gke.NewGKEOrchestrator()

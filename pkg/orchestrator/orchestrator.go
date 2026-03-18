@@ -44,6 +44,7 @@ type JobDefinition struct {
 	Topology           string
 	Scheduler          string
 	AwaitJobCompletion bool
+	PriorityClassName  string
 }
 
 type JobStatus struct {

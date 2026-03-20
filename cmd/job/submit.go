@@ -1,0 +1,184 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package job
+
+import (
+	"fmt"
+	"hpc-toolkit/pkg/logging"
+	"hpc-toolkit/pkg/orchestrator"
+	"hpc-toolkit/pkg/orchestrator/gke"
+	"hpc-toolkit/pkg/prereq"
+
+	"github.com/spf13/cobra"
+)
+
+var (
+	imageName       string
+	baseImage       string
+	buildContext    string
+	commandToRun    string
+	acceleratorType string
+	outputManifest  string
+	clusterName     string
+	clusterLocation string
+	projectID       string
+
+	workloadName            string
+	kueueQueueName          string
+	numSlices               int
+	vmsPerSlice             int
+	maxRestarts             int
+	ttlSecondsAfterFinished int
+
+	placementPolicy string
+	nodeSelector    map[string]string
+
+	cpuAffinityStr     string
+	restartOnExitCodes []int
+	imagePullSecrets   string
+	serviceAccountName string
+	topology           string
+	scheduler          string
+	platform           string
+
+	awaitJobCompletion bool
+	priorityClassName  string
+)
+
+var SubmitCmd = &cobra.Command{
+	Use:   "submit",
+	Short: "Submits a container image workload on a Gke cluster using JobSet.",
+	Long: `The 'submit' command deploys a container image as a workload (Kubernetes JobSet)
+on a GKE cluster, integrated with Kueue. Image can be pre-built (--image)
+or built on-the-fly using Crane (--base-image with --build-context).
+
+It accepts parameters for the container image, command to execute, accelerator type,
+and JobSet/Kueue specific configurations like workload name, queue, nodes, and restarts.`,
+	Run: runSubmitCmd,
+
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		logging.Info("Running prerequisite checks for 'gcluster job submit'...")
+		err := prereq.EnsurePrerequisites(&projectID)
+		if err != nil {
+			return fmt.Errorf("prerequisite checks failed: %w", err)
+		}
+
+		allowedPriorities := map[string]bool{
+			"very-low":  true,
+			"low":       true,
+			"medium":    true,
+			"high":      true,
+			"very-high": true,
+		}
+
+		if priorityClassName != "" && !allowedPriorities[priorityClassName] {
+			return fmt.Errorf("invalid value for --priority: %s. Allowed values are: very-low, low, medium, high, very-high", priorityClassName)
+		}
+
+		logging.Info("Prerequisite checks completed successfully.")
+		return nil
+	},
+	SilenceUsage: true,
+}
+
+func init() {
+	SubmitCmd.Flags().StringVarP(&imageName, "image", "i", "", "Name of the pre-built container image to run (e.g., my-project/my-image:tag).")
+	SubmitCmd.Flags().StringVar(&baseImage, "base-image", "", "Name of the base image for Crane to build upon (e.g., python:3.9-slim). Requires --build-context.")
+	SubmitCmd.Flags().StringVarP(&buildContext, "build-context", "c", "", "Path to the build context directory for Crane (e.g., .). Required with --base-image.")
+	SubmitCmd.Flags().StringVarP(&commandToRun, "command", "e", "", "Command to execute in the container (e.g., 'python train.py'). Required.")
+	SubmitCmd.Flags().StringVarP(&acceleratorType, "accelerator", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
+	SubmitCmd.Flags().StringVarP(&outputManifest, "dry-run-out", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
+	SubmitCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster to deploy the workload to. Required.")
+	SubmitCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	SubmitCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
+	SubmitCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-image.")
+
+	SubmitCmd.Flags().StringVarP(&workloadName, "name", "n", "", "Name of the workload to create. Required.")
+	SubmitCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "", "Name of the Kueue LocalQueue to submit the workload to. If empty, it will be auto-discovered.")
+	SubmitCmd.Flags().IntVar(&numSlices, "nodes", 1, "Number of JobSet replicas (nodes).")
+	SubmitCmd.Flags().IntVar(&vmsPerSlice, "vms-per-slice", 1, "Number of VMs (pods) per slice.")
+	SubmitCmd.Flags().IntVar(&maxRestarts, "max-restarts", 1, "Maximum number of restarts for the JobSet before failing.")
+	SubmitCmd.Flags().IntVar(&ttlSecondsAfterFinished, "ttl-seconds-after-finished", 3600, "Time (in seconds) to retain the JobSet after it finishes.")
+
+	SubmitCmd.Flags().StringVar(&placementPolicy, "placement-policy", "", "Name of the GKE placement policy to use.")
+	SubmitCmd.Flags().StringToStringVar(&nodeSelector, "machine-label", nil, "Key=value pairs for node labels to target specific machine types.")
+	SubmitCmd.Flags().StringVar(&cpuAffinityStr, "cpu-affinity", "", "CPU affinity rules (e.g., 'numa').")
+	SubmitCmd.Flags().IntSliceVar(&restartOnExitCodes, "restart-on-exit-codes", nil, "List of exit codes that should not trigger a job failure.")
+	SubmitCmd.Flags().StringVar(&imagePullSecrets, "image-pull-secret", "", "Comma-separated list of secrets for pulling images.")
+	SubmitCmd.Flags().StringVar(&serviceAccountName, "service-account", "", "Service account name for the pods.")
+	SubmitCmd.Flags().StringVar(&topology, "topology", "", "TPU slice topology (e.g., 2x2x1).")
+	SubmitCmd.Flags().StringVar(&scheduler, "scheduler", "", "Kubernetes Scheduler name (e.g., gke.io/topology-aware-auto).")
+	SubmitCmd.Flags().BoolVar(&awaitJobCompletion, "await-job-completion", false, "If true, gcluster will wait for the submitted job to complete.")
+	SubmitCmd.Flags().StringVar(&priorityClassName, "priority", "medium", "A priority, one of `very-low`, `low`, `medium`, `high` or `very-high`. Defaults to `medium`.")
+
+	_ = SubmitCmd.MarkFlagRequired("command")
+	_ = SubmitCmd.MarkFlagRequired("cluster")
+	_ = SubmitCmd.MarkFlagRequired("cluster-region")
+}
+
+func runSubmitCmd(cmd *cobra.Command, args []string) {
+	logging.Info("Executing gcluster job submit command...")
+
+	if imageName == "" && baseImage == "" {
+		logging.Fatal("Either --image or --base-image must be provided.")
+	}
+	if imageName != "" && baseImage != "" {
+		logging.Fatal("Cannot provide both --image and --base-image.")
+	}
+	if imageName != "" && buildContext != "" {
+		logging.Fatal("--build-context cannot be provided when --image is used as no build is performed.")
+	}
+	if baseImage != "" && buildContext == "" {
+		logging.Fatal("A --build-context must be provided when --base-image is used for a Crane build.")
+	}
+
+	jobDef := orchestrator.JobDefinition{
+		ImageName:               imageName,
+		BaseImage:               baseImage,
+		BuildContext:            buildContext,
+		Platform:                platform,
+		CommandToRun:            commandToRun,
+		AcceleratorType:         acceleratorType,
+		OutputManifest:          outputManifest,
+		ProjectID:               projectID,
+		ClusterName:             clusterName,
+		ClusterLocation:         clusterLocation,
+		WorkloadName:            workloadName,
+		KueueQueueName:          kueueQueueName,
+		NumSlices:               numSlices,
+		VmsPerSlice:             vmsPerSlice,
+		MaxRestarts:             maxRestarts,
+		TtlSecondsAfterFinished: ttlSecondsAfterFinished,
+		PlacementPolicy:         placementPolicy,
+		NodeSelector:            nodeSelector,
+		Affinity:                map[string]string{"cpu-affinity": cpuAffinityStr},
+		RestartOnExitCodes:      restartOnExitCodes,
+		ImagePullSecrets:        imagePullSecrets,
+		ServiceAccountName:      serviceAccountName,
+		Topology:                topology,
+		Scheduler:               scheduler,
+		AwaitJobCompletion:      awaitJobCompletion,
+		PriorityClassName:       priorityClassName,
+	}
+
+	gkeOrchestrator, err := gke.NewGKEOrchestrator()
+	if err != nil {
+		logging.Fatal("Failed to create GKE orchestrator: %v", err)
+	}
+
+	if err := gkeOrchestrator.SubmitJob(jobDef); err != nil {
+		logging.Fatal("gcluster job submit failed: %v", err)
+	}
+}

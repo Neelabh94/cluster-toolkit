@@ -167,6 +167,10 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 		return err
 	}
 
+	if err := g.ensureNodePoolImagePullPermissions(job); err != nil {
+		logging.Info("Warning: Failed to auto-grant Artifact Registry permissions to node pool service accounts: %v", err)
+	}
+
 	if err := g.checkAndInstallJobSetCRD(); err != nil {
 		return fmt.Errorf("failed to check or install JobSet CRD: %w", err)
 	}
@@ -262,17 +266,19 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 		return nil
 	}
 
-	rg := rgList[0].(map[string]interface{})
-	covered := rg["coveredResources"].([]interface{})
-
 	hasCPU := false
 	hasMem := false
-	for _, r := range covered {
-		if r.(string) == "cpu" {
-			hasCPU = true
-		}
-		if r.(string) == "memory" {
-			hasMem = true
+	for _, rgItem := range rgList {
+		rg := rgItem.(map[string]interface{})
+		if covered, ok := rg["coveredResources"].([]interface{}); ok {
+			for _, r := range covered {
+				if r.(string) == "cpu" {
+					hasCPU = true
+				}
+				if r.(string) == "memory" {
+					hasMem = true
+				}
+			}
 		}
 	}
 
@@ -315,6 +321,62 @@ func (g *GKEOrchestrator) getProjectID(initialProjectID string) (string, error) 
 	return initialProjectID, nil
 }
 
+type gkeCluster struct {
+	NodePools []struct {
+		Config struct {
+			ServiceAccount string `json:"serviceAccount"`
+		} `json:"config"`
+	} `json:"nodePools"`
+}
+
+func (g *GKEOrchestrator) ensureNodePoolImagePullPermissions(job orchestrator.JobDefinition) error {
+	logging.Info("Ensuring node pool service accounts have artifactregistry.reader role...")
+
+	res := g.executor.ExecuteCommand("gcloud", "container", "clusters", "describe", job.ClusterName,
+		"--location", job.ClusterLocation,
+		"--project", job.ProjectID,
+		"--format=json")
+	if res.ExitCode != 0 {
+		return fmt.Errorf("failed to describe cluster: %s", res.Stderr)
+	}
+
+	var clusterDesc gkeCluster
+	if err := json.Unmarshal([]byte(res.Stdout), &clusterDesc); err != nil {
+		return fmt.Errorf("failed to parse gcloud output: %w", err)
+	}
+
+	if len(clusterDesc.NodePools) == 0 {
+		return fmt.Errorf("no node pools found in cluster")
+	}
+
+	var uniqueSAs []string
+	seen := make(map[string]bool)
+
+	for _, np := range clusterDesc.NodePools {
+		sa := strings.TrimSpace(np.Config.ServiceAccount)
+		if sa == "" || sa == "default" {
+			continue
+		}
+		if !seen[sa] {
+			seen[sa] = true
+			uniqueSAs = append(uniqueSAs, sa)
+		}
+	}
+
+	for _, sa := range uniqueSAs {
+		logging.Info("Adding roles/artifactregistry.reader to service account %s on project %s...", sa, job.ProjectID)
+		iamRes := g.executor.ExecuteCommand("gcloud", "projects", "add-iam-policy-binding", job.ProjectID,
+			"--member", "serviceAccount:"+sa,
+			"--role", "roles/artifactregistry.reader",
+		)
+		if iamRes.ExitCode != 0 {
+			logging.Info("Warning: Failed to add IAM binding: %s", iamRes.Stderr)
+		}
+	}
+
+	return nil
+}
+
 func (g *GKEOrchestrator) resolveKueueQueue(requested string) (string, error) {
 	if requested != "" {
 		logging.Info("Using provided Kueue LocalQueue: %s", requested)
@@ -355,11 +417,24 @@ func (g *GKEOrchestrator) resolveAcceleratorType(requested string) (string, erro
 	output := strings.TrimSpace(res.Stdout)
 
 	if res.ExitCode != 0 || output == "" {
+		res = g.executor.ExecuteCommand("kubectl", "get", "resourceflavors.kueue.x-k8s.io", "-o", "jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-accelerator}{\"\\n\"}{end}")
+		if res.ExitCode == 0 {
+			output = strings.TrimSpace(res.Stdout)
+		}
+	}
+
+	if output == "" {
 		res = g.executor.ExecuteCommand("kubectl", "get", "nodes", "-o", "jsonpath={range .items[*]}{.metadata.labels.cloud\\.google\\.com/gke-accelerator}{\"\\n\"}{end}")
 		if res.ExitCode != 0 {
 			return "", fmt.Errorf("failed to query Nodes for accelerators: %s", res.Stderr)
 		}
 		output = strings.TrimSpace(res.Stdout)
+		if output == "" {
+			res = g.executor.ExecuteCommand("kubectl", "get", "nodes", "-o", "jsonpath={range .items[*]}{.metadata.labels.cloud\\.google\\.com/gke-tpu-accelerator}{\"\\n\"}{end}")
+			if res.ExitCode == 0 {
+				output = strings.TrimSpace(res.Stdout)
+			}
+		}
 	}
 
 	if output == "" {
@@ -392,6 +467,59 @@ func (g *GKEOrchestrator) resolveAcceleratorType(requested string) (string, erro
 
 	logging.Info("Warning: Multiple Accelerator Types found (%v). Defaulting to the first one: %s", uniqueAccels, uniqueAccels[0])
 	return uniqueAccels[0], nil
+}
+
+func (g *GKEOrchestrator) resolveTopology(requested string, accelType string) (string, error) {
+	if requested != "" {
+		logging.Info("Using provided Topology: %s", requested)
+		return requested, nil
+	}
+
+	if !strings.Contains(accelType, "tpu") {
+		return "", nil
+	}
+
+	logging.Info("Auto-discovering Topology for %s...", accelType)
+
+	res := g.executor.ExecuteCommand("kubectl", "get", "resourceflavors.kueue.x-k8s.io", "-o", "jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end}")
+	output := strings.TrimSpace(res.Stdout)
+
+	if output == "" {
+		res = g.executor.ExecuteCommand("kubectl", "get", "nodes", "-o", "jsonpath={range .items[*]}{.metadata.labels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end}")
+		if res.ExitCode != 0 {
+			return "", fmt.Errorf("failed to query Nodes for topology: %s", res.Stderr)
+		}
+		output = strings.TrimSpace(res.Stdout)
+	}
+
+	if output == "" {
+		return "", nil
+	}
+
+	topologies := make(map[string]bool)
+	for _, top := range strings.Split(output, "\n") {
+		top = strings.TrimSpace(top)
+		if top != "" {
+			topologies[top] = true
+		}
+	}
+
+	if len(topologies) == 0 {
+		return "", nil
+	}
+
+	uniqueTops := make([]string, 0, len(topologies))
+	for t := range topologies {
+		uniqueTops = append(uniqueTops, t)
+	}
+
+	if len(uniqueTops) == 1 {
+		logging.Info("Auto-discovered Topology: %s", uniqueTops[0])
+		return uniqueTops[0], nil
+	}
+
+	logging.Info("Warning: Multiple Topologies found (%v). Defaulting to the first one: %s", uniqueTops, uniqueTops[0])
+	return uniqueTops[0], nil
 }
 
 func (g *GKEOrchestrator) buildContainerImage(project, baseImage, buildContext, platformStr, imageName string) (string, error) {
@@ -955,6 +1083,12 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		Scheduler:          job.Scheduler,
 	}
 
+	topology, err := g.resolveTopology(job.Topology, job.AcceleratorType)
+	if err != nil {
+		return ManifestOptions{}, err
+	}
+	schedOpts.Topology = topology
+
 	nodeSelectorStr, err := g.buildNodeSelector(schedOpts, job)
 	if err != nil {
 		return ManifestOptions{}, err
@@ -976,7 +1110,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		imagePullSecretsStr = g.indentYaml(imagePullSecretsStr, 16)
 	}
 
-	topologyAnnotationStr := g.buildTopologyAnnotation(job.Topology)
+	topologyAnnotationStr := g.buildTopologyAnnotation(schedOpts.Topology)
 
 	tolerations := scheduling.GetTolerations(job.AcceleratorType)
 	var tolerationsStr string
@@ -1017,6 +1151,17 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 func (g *GKEOrchestrator) parseJobStatus(obj map[string]interface{}) (statusStr, completionTime string) {
 	statusStr = "Unknown"
 	completionTime = ""
+
+	// Determine base status from spec.suspend
+	if specMap, ok := obj["spec"].(map[string]interface{}); ok {
+		if suspend, ok := specMap["suspend"].(bool); ok {
+			if suspend {
+				statusStr = "Suspended"
+			} else {
+				statusStr = "Running"
+			}
+		}
+	}
 
 	statusMap, ok := obj["status"].(map[string]interface{})
 	if !ok {
@@ -1179,9 +1324,28 @@ func (g *GKEOrchestrator) GetJobLogs(name string, opts orchestrator.LogsOptions)
 		return "", fmt.Errorf("failed to verify job existence: %s", checkRes.Stderr)
 	}
 
-	res := g.executor.ExecuteCommand("kubectl", "logs", "-l", fmt.Sprintf("jobset.sigs.k8s.io/jobset-name=%s", name), "--all-containers")
-	if res.ExitCode != 0 {
+	// Retry loop for pulling logs, especially to handle ImagePullBackOff/waiting states
+	maxRetries := 12 // 12 * 5s = 1 minute timeout
+	var res shell.CommandResult
+	for i := 0; i < maxRetries; i++ {
+		res = g.executor.ExecuteCommand("kubectl", "logs", "-l", fmt.Sprintf("jobset.sigs.k8s.io/jobset-name=%s", name), "--all-containers")
+		if res.ExitCode == 0 {
+			break
+		}
+
+		if strings.Contains(res.Stderr, "is waiting to start") {
+			if i == 0 {
+				logging.Info("Job containers are waiting to start (likely pulling images). Waiting...")
+			}
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		
 		return "", fmt.Errorf("failed to get logs: %s\n%s", res.Stderr, res.Stdout)
+	}
+
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("timed out waiting for job to start; latest error: %s\n%s", res.Stderr, res.Stdout)
 	}
 
 	if strings.TrimSpace(res.Stdout) == "" {
@@ -1252,6 +1416,13 @@ func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptio
 		} else {
 			nodeSelector["cloud.google.com/gke-accelerator"] = accelLabel
 		}
+	}
+
+	if schedOpts.Topology != "" {
+		if nodeSelector == nil {
+			nodeSelector = make(map[string]string)
+		}
+		nodeSelector["cloud.google.com/gke-tpu-topology"] = schedOpts.Topology
 	}
 
 	if len(nodeSelector) > 0 {

@@ -1391,12 +1391,26 @@ func (g *GKEOrchestrator) listVolumesForCluster(clusterName string, opts orchest
 				continue
 			}
 
-			spec, _ := item.Object["spec"].(map[string]interface{})
-			stgClass, _ := spec["storageClassName"].(string)
+			// Try to get Type from labels (ghpc_module)
+			volType := ""
+			metadata, _ := item.Object["metadata"].(map[string]interface{})
+			if labels, ok := metadata["labels"].(map[string]interface{}); ok {
+				volType, _ = labels["ghpc_module"].(string)
+			}
+
+			// Fallback to StorageClassName
+			if volType == "" {
+				spec, _ := item.Object["spec"].(map[string]interface{})
+				volType, _ = spec["storageClassName"].(string)
+			}
+
+			if volType == "" {
+				volType = "Standard"
+			}
 
 			volumes = append(volumes, orchestrator.VolumeStatus{
 				Name:       name,
-				Type:       stgClass,
+				Type:       volType,
 				MountPoint: fmt.Sprintf("/mnt/data/%s", name),
 				Cluster:    clusterName,
 			})

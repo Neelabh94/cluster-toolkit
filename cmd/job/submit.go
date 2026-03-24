@@ -20,6 +20,7 @@ import (
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/orchestrator/gke"
 	"hpc-toolkit/pkg/prereq"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -57,7 +58,8 @@ var (
 	priorityClassName  string
 	isPathwaysJob      bool
 
-	pathways orchestrator.PathwaysJobDefinition
+	volumeStr []string
+	pathways  orchestrator.PathwaysJobDefinition
 )
 
 var SubmitCmd = &cobra.Command{
@@ -139,6 +141,8 @@ func init() {
 	SubmitCmd.Flags().StringVar(&pathways.WorkerArgs, "pathways-worker-args", "", "Arbitrary additional command-line arguments to pass directly to the `pathways-worker` executable.")
 	SubmitCmd.Flags().StringVar(&pathways.ColocatedPythonSidecarImage, "pathways-colocated-python-sidecar-image", "", "Image for an optional Python-based sidecar container to run alongside the Pathways head components.")
 
+	SubmitCmd.Flags().StringSliceVar(&volumeStr, "volume", nil, "Volumes to mount (format: <src>:<dest>).")
+
 	_ = SubmitCmd.MarkFlagRequired("command")
 	_ = SubmitCmd.MarkFlagRequired("cluster")
 	_ = SubmitCmd.MarkFlagRequired("cluster-region")
@@ -189,11 +193,39 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 		PriorityClassName:       priorityClassName,
 		IsPathwaysJob:           isPathwaysJob,
 		Pathways:                pathways,
+		Volumes:                 parseVolumeFlag(volumeStr),
 	}
 
 	if err := submitGKEJob(jobDef); err != nil {
 		logging.Fatal("gcluster job submit failed: %v", err)
 	}
+}
+
+func parseVolumeFlag(vStrs []string) []orchestrator.VolumeDefinition {
+	var vols []orchestrator.VolumeDefinition
+	for i, vStr := range vStrs {
+		parts := strings.SplitN(vStr, ":", 2)
+		if len(parts) != 2 {
+			logging.Fatal("invalid volume format: %s. Expected format: <src>:<dest>", vStr)
+		}
+		src := parts[0]
+		dest := parts[1]
+
+		volType := "pvc" // Default
+		if strings.HasPrefix(src, "gs://") {
+			volType = "gcsfuse"
+		} else if strings.HasPrefix(src, "/") {
+			volType = "hostPath"
+		}
+
+		vols = append(vols, orchestrator.VolumeDefinition{
+			Name:      fmt.Sprintf("vol-%d", i),
+			Source:    src,
+			MountPath: dest,
+			Type:      volType,
+		})
+	}
+	return vols
 }
 
 func submitGKEJob(jobDef orchestrator.JobDefinition) error {

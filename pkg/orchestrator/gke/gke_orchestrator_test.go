@@ -180,6 +180,52 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 	}
 }
 
+func TestGenerateGKEManifest_Volumes(t *testing.T) {
+	orc, _ := NewGKEOrchestrator()
+	job := orchestrator.JobDefinition{
+		WorkloadName: "volume-test",
+		CommandToRun: "echo hello",
+		Volumes: []orchestrator.VolumeDefinition{
+			{Name: "vol-0", Source: "gs://my-bucket", MountPath: "/data", Type: "gcsfuse"},
+			{Name: "vol-1", Source: "/host/path", MountPath: "/host", Type: "hostPath"},
+			{Name: "vol-2", Source: "my-pvc", MountPath: "/pvc", Type: "pvc"},
+		},
+	}
+
+	opts, err := orc.prepareManifestOptions(job, "test-image:latest")
+	if err != nil {
+		t.Fatalf("prepareManifestOptions failed: %v", err)
+	}
+
+	manifest, err := orc.GenerateGKEManifest(opts)
+	if err != nil {
+		t.Fatalf("GenerateGKEManifest failed: %v", err)
+	}
+
+	expectedSubStrs := []string{
+		"gke-gcsfuse/volumes: \"true\"",
+		"name: vol-0",
+		"mountPath: /data",
+		"name: vol-1",
+		"mountPath: /host",
+		"name: vol-2",
+		"mountPath: /pvc",
+		"csi:",
+		"driver: gcsfuse.csi.storage.gke.io",
+		"bucketName: my-bucket",
+		"hostPath:",
+		"path: /host/path",
+		"persistentVolumeClaim:",
+		"claimName: my-pvc",
+	}
+
+	for _, want := range expectedSubStrs {
+		if !strings.Contains(manifest, want) {
+			t.Errorf("manifest missing expected substring %q\nManifest: %s", want, manifest)
+		}
+	}
+}
+
 func TestGenerateGKEManifest_CommandEscaping(t *testing.T) {
 	orc, _ := NewGKEOrchestrator()
 	opts := ManifestOptions{

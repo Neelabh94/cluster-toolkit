@@ -36,6 +36,13 @@ type PathwaysJobDefinition struct {
 	ColocatedPythonSidecarImage string // Default: ""
 }
 
+type VolumeDefinition struct {
+	Name      string
+	Source    string // The raw <src>
+	MountPath string // The <dest>
+	Type      string // "gcsfuse", "hostPath", "pvc"
+}
+
 type JobDefinition struct {
 	ImageName       string
 	BaseImage       string
@@ -71,6 +78,8 @@ type JobDefinition struct {
 	// Pathways-specific fields encapsulated
 	IsPathwaysJob bool
 	Pathways      PathwaysJobDefinition // Embedded struct for Pathways-specific args
+
+	Volumes []VolumeDefinition
 }
 
 type JobStatus struct {

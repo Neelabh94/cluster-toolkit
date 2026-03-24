@@ -241,48 +241,17 @@ func (g *GKEOrchestrator) initializeJobSubmission(job orchestrator.JobDefinition
 }
 
 func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) error {
-	res := g.executor.ExecuteCommand("kubectl", "get", "localqueue", localQueueName, "-n", "default", "-o", "jsonpath={.spec.clusterQueue}")
-	if res.ExitCode != 0 {
-		return fmt.Errorf("failed to find clusterqueue for %s: %s", localQueueName, res.Stderr)
-	}
-	cqName := strings.TrimSpace(res.Stdout)
-	if cqName == "" {
-		cqName = localQueueName
-	}
-
-	res = g.executor.ExecuteCommand("kubectl", "get", "clusterqueue", cqName, "-o", "json")
-	if res.ExitCode != 0 {
-		return fmt.Errorf("failed to get clusterqueue %s: %s", cqName, res.Stderr)
-	}
-
-	var cq map[string]interface{}
-	if err := json.Unmarshal([]byte(res.Stdout), &cq); err != nil {
+	cqName, err := g.getClusterQueueName(localQueueName)
+	if err != nil {
 		return err
 	}
 
-	spec := cq["spec"].(map[string]interface{})
-	rgList := spec["resourceGroups"].([]interface{})
-	if len(rgList) == 0 {
-		return nil
+	hasCoverage, err := g.checkClusterQueueCoverage(cqName)
+	if err != nil {
+		return err
 	}
 
-	hasCPU := false
-	hasMem := false
-	for _, rgItem := range rgList {
-		rg := rgItem.(map[string]interface{})
-		if covered, ok := rg["coveredResources"].([]interface{}); ok {
-			for _, r := range covered {
-				if r.(string) == "cpu" {
-					hasCPU = true
-				}
-				if r.(string) == "memory" {
-					hasMem = true
-				}
-			}
-		}
-	}
-
-	if hasCPU && hasMem {
+	if hasCoverage {
 		logging.Info("Kueue ClusterQueue '%s' already covers CPU and Memory.", cqName)
 		return nil
 	}
@@ -295,13 +264,69 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "memory", "nominalQuota": "2000Gi"}}
 	]`
 
-	res = g.executor.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
+	res := g.executor.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
 	if res.ExitCode != 0 {
 		return fmt.Errorf("failed to patch clusterqueue: %s", res.Stderr)
 	}
 
 	logging.Info("ClusterQueue successfully updated.")
 	return nil
+}
+
+func (g *GKEOrchestrator) getClusterQueueName(localQueueName string) (string, error) {
+	res := g.executor.ExecuteCommand("kubectl", "get", "localqueue", localQueueName, "-n", "default", "-o", "jsonpath={.spec.clusterQueue}")
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("failed to find clusterqueue for %s: %s", localQueueName, res.Stderr)
+	}
+	cqName := strings.TrimSpace(res.Stdout)
+	if cqName == "" {
+		cqName = localQueueName
+	}
+	return cqName, nil
+}
+
+func (g *GKEOrchestrator) checkClusterQueueCoverage(cqName string) (bool, error) {
+	res := g.executor.ExecuteCommand("kubectl", "get", "clusterqueue", cqName, "-o", "json")
+	if res.ExitCode != 0 {
+		return false, fmt.Errorf("failed to get clusterqueue %s: %s", cqName, res.Stderr)
+	}
+
+	var cq map[string]interface{}
+	if err := json.Unmarshal([]byte(res.Stdout), &cq); err != nil {
+		return false, err
+	}
+
+	spec, ok := cq["spec"].(map[string]interface{})
+	if !ok {
+		return false, nil
+	}
+	rgList, ok := spec["resourceGroups"].([]interface{})
+	if !ok || len(rgList) == 0 {
+		return false, nil
+	}
+
+	hasCPU := false
+	hasMem := false
+	for _, rgItem := range rgList {
+		rg, ok := rgItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if covered, ok := rg["coveredResources"].([]interface{}); ok {
+			for _, r := range covered {
+				if rStr, ok := r.(string); ok {
+					if rStr == "cpu" {
+						hasCPU = true
+					}
+					if rStr == "memory" {
+						hasMem = true
+					}
+				}
+			}
+		}
+	}
+
+	return hasCPU && hasMem, nil
 }
 
 func (g *GKEOrchestrator) getProjectID(initialProjectID string) (string, error) {
@@ -413,6 +438,20 @@ func (g *GKEOrchestrator) resolveAcceleratorType(requested string) (string, erro
 
 	logging.Info("Auto-discovering Accelerator Type...")
 
+	output, err := g.queryAcceleratorLabels()
+	if err != nil {
+		return "", err
+	}
+
+	if output == "" {
+		logging.Info("No accelerators found. Defaulting to CPU-only workload.")
+		return "", nil
+	}
+
+	return g.parseAcceleratorOutput(output)
+}
+
+func (g *GKEOrchestrator) queryAcceleratorLabels() (string, error) {
 	res := g.executor.ExecuteCommand("kubectl", "get", "resourceflavors.kueue.x-k8s.io", "-o", "jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-accelerator}{\"\\n\"}{end}")
 	output := strings.TrimSpace(res.Stdout)
 
@@ -436,12 +475,10 @@ func (g *GKEOrchestrator) resolveAcceleratorType(requested string) (string, erro
 			}
 		}
 	}
+	return output, nil
+}
 
-	if output == "" {
-		logging.Info("No accelerators found. Defaulting to CPU-only workload.")
-		return "", nil
-	}
-
+func (g *GKEOrchestrator) parseAcceleratorOutput(output string) (string, error) {
 	accelerators := make(map[string]bool)
 	for _, acc := range strings.Split(output, "\n") {
 		acc = strings.TrimSpace(acc)
@@ -1340,7 +1377,7 @@ func (g *GKEOrchestrator) GetJobLogs(name string, opts orchestrator.LogsOptions)
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		
+
 		return "", fmt.Errorf("failed to get logs: %s\n%s", res.Stderr, res.Stdout)
 	}
 

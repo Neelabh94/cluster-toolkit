@@ -305,6 +305,10 @@ func (g *GKEOrchestrator) checkClusterQueueCoverage(cqName string) (bool, error)
 		return false, nil
 	}
 
+	return g.hasRequiredResources(rgList), nil
+}
+
+func (g *GKEOrchestrator) hasRequiredResources(rgList []interface{}) bool {
 	hasCPU := false
 	hasMem := false
 	for _, rgItem := range rgList {
@@ -326,7 +330,7 @@ func (g *GKEOrchestrator) checkClusterQueueCoverage(cqName string) (bool, error)
 		}
 	}
 
-	return hasCPU && hasMem, nil
+	return hasCPU && hasMem
 }
 
 func (g *GKEOrchestrator) getProjectID(initialProjectID string) (string, error) {

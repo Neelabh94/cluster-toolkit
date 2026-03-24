@@ -244,6 +244,42 @@ spec:
 	}
 }
 
+func TestGeneratePathwaysManifest(t *testing.T) {
+	job := orchestrator.JobDefinition{
+		WorkloadName: "pathways-test",
+		CommandToRun: "echo hello",
+		NumSlices:    2,
+		Pathways: orchestrator.PathwaysJobDefinition{
+			ProxyServerImage: "proxy:latest",
+			ServerImage:      "server:latest",
+			WorkerImage:      "worker:latest",
+			GCSLocation:      "gs://my-bucket",
+		},
+	}
+
+	orc, _ := NewGKEOrchestrator()
+	manifest, err := orc.generatePathwaysManifest(job, "test-image:latest")
+	if err != nil {
+		t.Fatalf("generatePathwaysManifest failed: %v", err)
+	}
+
+	if !strings.Contains(manifest, "name: pathways-test") {
+		t.Errorf("manifest does not contain correct workload name")
+	}
+
+	if !strings.Contains(manifest, "replicas: 2") {
+		t.Errorf("manifest does not contain correct number of replicas")
+	}
+
+	if !strings.Contains(manifest, "image: proxy:latest") {
+		t.Errorf("manifest does not contain correct proxy image")
+	}
+
+	if !strings.Contains(manifest, "--gcs_location=gs://my-bucket") {
+		t.Errorf("manifest does not contain correct GCS location")
+	}
+}
+
 func TestWaitForJobCompletion(t *testing.T) {
 	workloadName := "test-workload"
 	clusterName := "test-cluster"

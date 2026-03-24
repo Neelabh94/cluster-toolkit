@@ -14,6 +14,28 @@
 
 package orchestrator
 
+// In pkg/orchestrator/orchestrator.go
+type PathwaysJobDefinition struct {
+	// Core Pathways Images
+	ProxyServerImage string // Default: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest
+	ServerImage      string // Default: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest
+	WorkerImage      string // Default: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest (or value of ServerImage)
+
+	// Pathways specific configurations
+	Headless         bool   // Default: false
+	GCSLocation      string // Default: gs://cloud-pathways-staging/tmp
+	ElasticSlices    int    // Default: 0
+	MaxSliceRestarts int    // Default: 1
+
+	// Custom Arguments for Pathways components
+	ProxyArgs  string // Default: ""
+	ServerArgs string // Default: ""
+	WorkerArgs string // Default: ""
+
+	// Pathways-specific sidecars
+	ColocatedPythonSidecarImage string // Default: ""
+}
+
 type JobDefinition struct {
 	ImageName       string
 	BaseImage       string
@@ -45,6 +67,10 @@ type JobDefinition struct {
 	Scheduler          string
 	AwaitJobCompletion bool
 	PriorityClassName  string
+
+	// Pathways-specific fields encapsulated
+	IsPathwaysJob bool
+	Pathways      PathwaysJobDefinition // Embedded struct for Pathways-specific args
 }
 
 type JobStatus struct {

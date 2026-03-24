@@ -394,6 +394,11 @@ func checkArtifactRegistryAPIEnabled(newState *PrereqState, projectID *string) e
 // EnsurePrerequisites checks all necessary gcloud and kubectl prerequisites.
 // It modifies the projectID pointer if it infers it or gets it from user input.
 func EnsurePrerequisites(projectID *string) error {
+	if os.Getenv("GCLUSTER_SKIP_PREREQ_CHECKS") == "true" {
+		logging.Info("Skipping prerequisite checks due to GCLUSTER_SKIP_PREREQ_CHECKS environment variable.")
+		return nil
+	}
+
 	state := loadPrereqState()
 	newState := state // Copy the loaded state to modify and save later
 

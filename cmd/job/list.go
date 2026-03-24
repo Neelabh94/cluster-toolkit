@@ -74,7 +74,7 @@ func runListWorkloads(cmd *cobra.Command, args []string) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 	fmt.Fprintln(w, "NAME	STATUS	CREATION_TIME	COMPLETION_TIME")
 	for _, job := range jobs {
-		fmt.Fprintf(w, "%s	%s	%s	%s", job.Name, job.Status, job.CreationTime, job.CompletionTime)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", job.Name, job.Status, job.CreationTime, job.CompletionTime)
 	}
 	w.Flush()
 }

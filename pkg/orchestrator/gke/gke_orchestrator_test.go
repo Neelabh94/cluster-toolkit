@@ -141,7 +141,11 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 				AcceleratorType: tt.acceleratorType,
 			}
 
-			orc := &GKEOrchestrator{executor: NewMockExecutor(make(map[string][]shell.CommandResult))} // No specific mocks needed for this test
+			mockResponses := map[string][]shell.CommandResult{
+				"kubectl get resourceflavors": {{ExitCode: 0, Stdout: ""}},
+				"kubectl get nodes":           {{ExitCode: 0, Stdout: ""}},
+			}
+			orc := &GKEOrchestrator{executor: NewMockExecutor(mockResponses)}
 
 			opts, err := orc.prepareManifestOptions(job, "test-image:latest")
 			if err != nil {

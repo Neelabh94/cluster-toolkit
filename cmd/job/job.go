@@ -21,8 +21,8 @@ import (
 // JobCmd represents the base command for job-related operations
 var JobCmd = &cobra.Command{
 	Use:   "job",
-	Short: "Manage jobs on the cluster.",
-	Long:  `Manage jobs on the cluster, including submitting, listing, cancelling, and viewing logs.`,
+	Short: "[EXPERIMENTAL] Manage jobs on the cluster.",
+	Long:  `Manage jobs on the cluster (EXPERIMENTAL/BETA). This feature is under active development and not yet supported for production use.`,
 }
 
 func init() {

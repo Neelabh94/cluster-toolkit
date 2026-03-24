@@ -68,9 +68,14 @@ spec:
             metadata:
               labels:
                 gcluster.google.com/workload: {{.WorkloadName}}
-{{- if .TopologyAnnotation }}
+{{- if or .TopologyAnnotation .GCSFuseEnabled }}
               annotations:
+{{- if .TopologyAnnotation }}
 {{.TopologyAnnotation}}
+{{- end }}
+{{- if .GCSFuseEnabled }}
+                gke-gcsfuse/volumes: "true"
+{{- end }}
 {{- end }}
             spec:
 {{- if .SchedulerName }}
@@ -87,9 +92,11 @@ spec:
                 volumeMounts:
                 - name: temp-storage
                   mountPath: /mnt/data
+{{.VolumeMountsYAML}}
               volumes:
               - name: temp-storage
                 emptyDir: {}
+{{.VolumesYAML}}
 {{- if .NodeSelector }}
               nodeSelector:
 {{.NodeSelector}}
@@ -136,6 +143,10 @@ type ManifestOptions struct {
 	Tolerations             string
 	AwaitJobCompletion      bool
 	PriorityClassName       string
+	VolumesYAML             string
+	VolumeMountsYAML        string
+	GCSFuseEnabled          bool
+	Pathways                orchestrator.PathwaysJobDefinition
 }
 
 type Executor interface {
@@ -233,18 +244,14 @@ func (g *GKEOrchestrator) generatePathwaysManifest(job orchestrator.JobDefinitio
 		return "", fmt.Errorf("failed to parse pathways jobset template: %w", err)
 	}
 
-	// The template requires the full JobDefinition, so we pass it directly.
-	// We also pass the fullImageName separately.
-	data := struct {
-		orchestrator.JobDefinition
-		FullImageName string
-	}{
-		JobDefinition: job,
-		FullImageName: fullImageName,
+	opts, err := g.prepareManifestOptions(job, fullImageName)
+	if err != nil {
+		return "", err
 	}
+	opts.Pathways = job.Pathways
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
+	if err := tmpl.Execute(&buf, opts); err != nil {
 		return "", fmt.Errorf("failed to execute pathways jobset template: %w", err)
 	}
 
@@ -1152,6 +1159,10 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, update
 		SchedulerName           string
 		Tolerations             string
 		PriorityClassName       string
+		VolumesYAML             string
+		VolumeMountsYAML        string
+		GCSFuseEnabled          bool
+		Pathways                orchestrator.PathwaysJobDefinition
 	}{
 		WorkloadName:            opts.WorkloadName,
 		KueueQueueName:          opts.KueueQueueName,
@@ -1171,6 +1182,10 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, update
 		SchedulerName:           opts.SchedulerName,
 		Tolerations:             opts.Tolerations,
 		PriorityClassName:       opts.PriorityClassName,
+		VolumesYAML:             opts.VolumesYAML,
+		VolumeMountsYAML:        opts.VolumeMountsYAML,
+		GCSFuseEnabled:          opts.GCSFuseEnabled,
+		Pathways:                opts.Pathways,
 	}
 }
 
@@ -1233,7 +1248,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		tolerationsStr = g.indentYaml(string(b), 16)
 	}
 
-	return ManifestOptions{
+	opts := ManifestOptions{
 		WorkloadName:            job.WorkloadName,
 		FullImageName:           fullImageName,
 		CommandToRun:            job.CommandToRun,
@@ -1256,7 +1271,62 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		Tolerations:             tolerationsStr,
 		AwaitJobCompletion:      job.AwaitJobCompletion,
 		PriorityClassName:       job.PriorityClassName,
-	}, nil
+	}
+
+	g.addVolumeOptions(&opts, job.Volumes)
+
+	return opts, nil
+}
+
+func (g *GKEOrchestrator) addVolumeOptions(opts *ManifestOptions, vols []orchestrator.VolumeDefinition) {
+	if len(vols) == 0 {
+		return
+	}
+
+	var volSpecs []map[string]interface{}
+	var mountSpecs []map[string]interface{}
+	gcsFuseEnabled := false
+
+	for _, v := range vols {
+		mountSpecs = append(mountSpecs, map[string]interface{}{
+			"name":      v.Name,
+			"mountPath": v.MountPath,
+		})
+
+		volSpec := map[string]interface{}{
+			"name": v.Name,
+		}
+
+		switch v.Type {
+		case "gcsfuse":
+			gcsFuseEnabled = true
+			volSpec["csi"] = map[string]interface{}{
+				"driver":   "gcsfuse.csi.storage.gke.io",
+				"readOnly": true,
+				"volumeAttributes": map[string]interface{}{
+					"bucketName": strings.TrimPrefix(v.Source, "gs://"),
+				},
+			}
+		case "hostPath":
+			volSpec["hostPath"] = map[string]interface{}{
+				"path": v.Source,
+			}
+		case "pvc":
+			volSpec["persistentVolumeClaim"] = map[string]interface{}{
+				"claimName": v.Source,
+			}
+		}
+		volSpecs = append(volSpecs, volSpec)
+	}
+
+	opts.GCSFuseEnabled = gcsFuseEnabled
+
+	if b, err := yaml.Marshal(mountSpecs); err == nil {
+		opts.VolumeMountsYAML = g.indentYaml(string(b), 16)
+	}
+	if b, err := yaml.Marshal(volSpecs); err == nil {
+		opts.VolumesYAML = g.indentYaml(string(b), 14)
+	}
 }
 
 func (g *GKEOrchestrator) parseJobStatus(obj map[string]interface{}) (statusStr, completionTime string) {

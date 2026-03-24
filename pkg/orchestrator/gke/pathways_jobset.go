@@ -36,8 +36,11 @@ spec:
         template:
           metadata:
             labels:
-              gcluster.google.com/workload: {{.WorkloadName}}
               cloud.google.com/gke-nodepool: cpu-np
+{{- if .GCSFuseEnabled }}
+            annotations:
+              gke-gcsfuse/volumes: "true"
+{{- end }}
           spec:
             restartPolicy: Never
             containers:
@@ -67,6 +70,7 @@ spec:
               volumeMounts:
               - name: dshm
                 mountPath: /dev/shm
+{{.VolumeMountsYAML}}
             {{- end}}
             {{- if .Pathways.ColocatedPythonSidecarImage}}
             - name: python-sidecar
@@ -76,6 +80,7 @@ spec:
             - name: dshm
               emptyDir:
                 medium: Memory
+{{.VolumesYAML}}
   - name: worker
     replicas: {{.NumSlices}}
     template:
@@ -120,8 +125,10 @@ spec:
               volumeMounts:
               - name: dshm
                 mountPath: /dev/shm
+{{.VolumeMountsYAML}}
             volumes:
             - name: dshm
               emptyDir:
                 medium: Memory
+{{.VolumesYAML}}
 `

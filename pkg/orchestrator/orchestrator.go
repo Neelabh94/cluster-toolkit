@@ -54,7 +54,7 @@ type JobStatus struct {
 	CompletionTime string
 }
 
-type StorageStatus struct {
+type VolumeStatus struct {
 	Name       string
 	Type       string
 	MountPoint string
@@ -87,5 +87,5 @@ type Orchestrator interface {
 	ListJobs(opts ListOptions) ([]JobStatus, error)
 	CancelJob(name string, opts CancelOptions) error
 	GetJobLogs(name string, opts LogsOptions) (string, error)
-	ListStorages(opts ListOptions) ([]StorageStatus, error)
+	ListVolumes(opts ListOptions) ([]VolumeStatus, error)
 }

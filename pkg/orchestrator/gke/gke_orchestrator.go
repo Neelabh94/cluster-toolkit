@@ -1330,7 +1330,7 @@ func (g *GKEOrchestrator) ListJobs(opts orchestrator.ListOptions) ([]orchestrato
 	return jobs, nil
 }
 
-func (g *GKEOrchestrator) ListStorages(opts orchestrator.ListOptions) ([]orchestrator.StorageStatus, error) {
+func (g *GKEOrchestrator) ListVolumes(opts orchestrator.ListOptions) ([]orchestrator.VolumeStatus, error) {
 	projectID, err := g.getProjectID(opts.ProjectID)
 	if err != nil {
 		return nil, err
@@ -1348,26 +1348,26 @@ func (g *GKEOrchestrator) ListStorages(opts orchestrator.ListOptions) ([]orchest
 		}
 		if len(clusters) == 0 {
 			logging.Info("No clusters found in project '%s', region '%s'.", opts.ProjectID, opts.ClusterLocation)
-			return []orchestrator.StorageStatus{}, nil
+			return []orchestrator.VolumeStatus{}, nil
 		}
 		logging.Info("Found clusters: %v", clusters)
 	}
 
-	var allStorages []orchestrator.StorageStatus
+	var allVolumes []orchestrator.VolumeStatus
 	for _, cluster := range clusters {
-		storages, err := g.listStoragesForCluster(cluster, opts)
+		volumes, err := g.listVolumesForCluster(cluster, opts)
 		if err != nil {
-			logging.Info("Warning: Failed to list storages for cluster '%s': %v", cluster, err)
+			logging.Info("Warning: Failed to list volumes for cluster '%s': %v", cluster, err)
 			continue
 		}
-		allStorages = append(allStorages, storages...)
+		allVolumes = append(allVolumes, volumes...)
 	}
 
-	return allStorages, nil
+	return allVolumes, nil
 }
 
-func (g *GKEOrchestrator) listStoragesForCluster(clusterName string, opts orchestrator.ListOptions) ([]orchestrator.StorageStatus, error) {
-	logging.Info("Listing storage resources in cluster '%s'...", clusterName)
+func (g *GKEOrchestrator) listVolumesForCluster(clusterName string, opts orchestrator.ListOptions) ([]orchestrator.VolumeStatus, error) {
+	logging.Info("Listing volume resources in cluster '%s'...", clusterName)
 	if err := g.configureKubectl(clusterName, opts.ClusterLocation, opts.ProjectID); err != nil {
 		return nil, err
 	}
@@ -1377,7 +1377,7 @@ func (g *GKEOrchestrator) listStoragesForCluster(clusterName string, opts orches
 		return nil, err
 	}
 
-	var storages []orchestrator.StorageStatus
+	var volumes []orchestrator.VolumeStatus
 
 	// List GKE PVCs with ghpc_role=file-system label
 	gvrPVC := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
@@ -1394,7 +1394,7 @@ func (g *GKEOrchestrator) listStoragesForCluster(clusterName string, opts orches
 			spec, _ := item.Object["spec"].(map[string]interface{})
 			stgClass, _ := spec["storageClassName"].(string)
 
-			storages = append(storages, orchestrator.StorageStatus{
+			volumes = append(volumes, orchestrator.VolumeStatus{
 				Name:       name,
 				Type:       stgClass,
 				MountPoint: fmt.Sprintf("/mnt/data/%s", name),
@@ -1405,7 +1405,7 @@ func (g *GKEOrchestrator) listStoragesForCluster(clusterName string, opts orches
 		return nil, fmt.Errorf("failed to list PVCs: %w", err)
 	}
 
-	return storages, nil
+	return volumes, nil
 }
 
 func (g *GKEOrchestrator) ListClusters(projectID, location string) ([]string, error) {

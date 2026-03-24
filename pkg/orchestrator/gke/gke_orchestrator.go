@@ -183,6 +183,13 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 	if err != nil {
 		return err
 	}
+	if job.IsPathwaysJob {
+		manifestContent, err := g.generatePathwaysManifest(job, fullImageName)
+		if err != nil {
+			return err
+		}
+		return g.applyManifest(manifestContent, job.OutputManifest, job.WorkloadName)
+	}
 
 	manifestOpts, err := g.prepareManifestOptions(job, fullImageName)
 	if err != nil {
@@ -202,6 +209,66 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 	}
 
 	logging.Info("gcluster job submit workflow completed.")
+	return nil
+}
+
+func (g *GKEOrchestrator) generatePathwaysManifest(job orchestrator.JobDefinition, fullImageName string) (string, error) {
+	// Set default values for Pathways-specific fields if not provided
+	if job.Pathways.ProxyServerImage == "" {
+		job.Pathways.ProxyServerImage = "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
+	}
+	if job.Pathways.ServerImage == "" {
+		job.Pathways.ServerImage = "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest"
+	}
+	if job.Pathways.WorkerImage == "" {
+		// WorkerImage defaults to ServerImage if not explicitly set
+		job.Pathways.WorkerImage = job.Pathways.ServerImage
+	}
+	if job.Pathways.GCSLocation == "" {
+		job.Pathways.GCSLocation = "gs://cloud-pathways-staging/tmp"
+	}
+
+	tmpl, err := template.New("pathwaysJobSet").Parse(pathwaysJobSetTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse pathways jobset template: %w", err)
+	}
+
+	// The template requires the full JobDefinition, so we pass it directly.
+	// We also pass the fullImageName separately.
+	data := struct {
+		orchestrator.JobDefinition
+		FullImageName string
+	}{
+		JobDefinition: job,
+		FullImageName: fullImageName,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute pathways jobset template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func (g *GKEOrchestrator) applyManifest(manifestContent, outputManifestPath, workloadName string) error {
+	if outputManifestPath != "" {
+		logging.Info("Saving GKE manifest to %s", outputManifestPath)
+		if err := os.WriteFile(outputManifestPath, []byte(manifestContent), 0644); err != nil {
+			return fmt.Errorf("failed to write GKE manifest to file %s: %w", outputManifestPath, err)
+		}
+		logging.Info("GKE manifest saved successfully.")
+	} else {
+		logging.Info("Cleaning up any existing JobSet with name '%s'...", workloadName)
+		g.executor.ExecuteCommand("kubectl", "delete", "jobset", workloadName, "--ignore-not-found=true")
+
+		logging.Info("Applying GKE manifest to cluster...")
+		err := g.applyJobSetManifests([]byte(manifestContent))
+		if err != nil {
+			return fmt.Errorf("failed to apply GKE manifest: %w", err)
+		}
+		logging.Info("GKE workload deployed successfully.")
+	}
 	return nil
 }
 
@@ -604,6 +671,22 @@ func (g *GKEOrchestrator) configureKubectl(clusterName, clusterLocation, project
 	return nil
 }
 
+func (g *GKEOrchestrator) BuildContainerImage(project, baseImage, buildContext, platformStr, imageName string) (string, error) {
+	return g.buildContainerImage(project, baseImage, buildContext, platformStr, imageName)
+}
+
+func (g *GKEOrchestrator) PrepareManifestOptions(job orchestrator.JobDefinition, fullImageName string) (ManifestOptions, error) {
+	return g.prepareManifestOptions(job, fullImageName)
+}
+
+func (g *GKEOrchestrator) GeneratePathwaysManifest(job orchestrator.JobDefinition, fullImageName string) (string, error) {
+	return g.generatePathwaysManifest(job, fullImageName)
+}
+
+func (g *GKEOrchestrator) ApplyManifest(manifestContent, outputManifestPath, workloadName string) error {
+	return g.applyManifest(manifestContent, outputManifestPath, workloadName)
+}
+
 func (g *GKEOrchestrator) generateAndApplyManifest(opts ManifestOptions, outputManifestPath string) error {
 	logging.Info("Generating GKE manifest...")
 	gkeManifestContent, err := g.GenerateGKEManifest(opts)
@@ -611,24 +694,7 @@ func (g *GKEOrchestrator) generateAndApplyManifest(opts ManifestOptions, outputM
 		return fmt.Errorf("failed to generate GKE manifest: %w", err)
 	}
 
-	if outputManifestPath != "" {
-		logging.Info("Saving GKE manifest to %s", outputManifestPath)
-		if err := os.WriteFile(outputManifestPath, []byte(gkeManifestContent), 0644); err != nil {
-			return fmt.Errorf("failed to write GKE manifest to file %s: %w", outputManifestPath, err)
-		}
-		logging.Info("GKE manifest saved successfully.")
-	} else {
-		logging.Info("Cleaning up any existing JobSet with name '%s'...", opts.WorkloadName)
-		g.executor.ExecuteCommand("kubectl", "delete", "jobset", opts.WorkloadName, "--ignore-not-found=true")
-
-		logging.Info("Applying GKE manifest to cluster...")
-		err = g.applyJobSetManifests([]byte(gkeManifestContent))
-		if err != nil {
-			return fmt.Errorf("failed to apply GKE manifest: %w", err)
-		}
-		logging.Info("GKE workload deployed successfully.")
-	}
-	return nil
+	return g.applyManifest(gkeManifestContent, outputManifestPath, opts.WorkloadName)
 }
 
 func (g *GKEOrchestrator) checkAndInstallJobSetCRD() error {

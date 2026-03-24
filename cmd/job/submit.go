@@ -55,6 +55,9 @@ var (
 
 	awaitJobCompletion bool
 	priorityClassName  string
+	isPathwaysJob      bool
+
+	pathways orchestrator.PathwaysJobDefinition
 )
 
 var SubmitCmd = &cobra.Command{
@@ -123,6 +126,19 @@ func init() {
 	SubmitCmd.Flags().BoolVar(&awaitJobCompletion, "await-job-completion", false, "If true, gcluster will wait for the submitted job to complete.")
 	SubmitCmd.Flags().StringVar(&priorityClassName, "priority", "medium", "A priority, one of `very-low`, `low`, `medium`, `high` or `very-high`. Defaults to `medium`.")
 
+	SubmitCmd.Flags().BoolVar(&isPathwaysJob, "pathways", false, "If present, gcluster will generate a manifest for a Pathways job.")
+	SubmitCmd.Flags().StringVar(&pathways.ProxyServerImage, "pathways-proxy-server-image", "", "The image for the Pathways proxy server.")
+	SubmitCmd.Flags().StringVar(&pathways.ServerImage, "pathways-server-image", "", "The image for the Pathways server.")
+	SubmitCmd.Flags().StringVar(&pathways.WorkerImage, "pathways-worker-image", "", "The image for the Pathways worker.")
+	SubmitCmd.Flags().BoolVar(&pathways.Headless, "pathways-headless", false, "If present, the user's workload container will not be deployed within the `pathways-head` job.")
+	SubmitCmd.Flags().StringVar(&pathways.GCSLocation, "pathways-gcs-location", "", "A Google Cloud Storage (GCS) bucket location to be used by Pathways for temporary files, checkpoints, and inter-worker communication.")
+	SubmitCmd.Flags().IntVar(&pathways.ElasticSlices, "pathways-elastic-slices", 0, "Configures the number of elastic slices, potentially allowing for more flexible resource allocation.")
+	SubmitCmd.Flags().IntVar(&pathways.MaxSliceRestarts, "pathways-max-slice-restarts", 1, "Maximum times the workers in a slice can be restarted. Used with --pathways-elastic-slices.")
+	SubmitCmd.Flags().StringVar(&pathways.ProxyArgs, "pathways-proxy-args", "", "Arbitrary additional command-line arguments to pass directly to the `pathways-proxy` executable.")
+	SubmitCmd.Flags().StringVar(&pathways.ServerArgs, "pathways-server-args", "", "Arbitrary additional command-line arguments to pass directly to the `pathways-rm` (resource manager) executable.")
+	SubmitCmd.Flags().StringVar(&pathways.WorkerArgs, "pathways-worker-args", "", "Arbitrary additional command-line arguments to pass directly to the `pathways-worker` executable.")
+	SubmitCmd.Flags().StringVar(&pathways.ColocatedPythonSidecarImage, "pathways-colocated-python-sidecar-image", "", "Image for an optional Python-based sidecar container to run alongside the Pathways head components.")
+
 	_ = SubmitCmd.MarkFlagRequired("command")
 	_ = SubmitCmd.MarkFlagRequired("cluster")
 	_ = SubmitCmd.MarkFlagRequired("cluster-region")
@@ -171,14 +187,45 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 		Scheduler:               scheduler,
 		AwaitJobCompletion:      awaitJobCompletion,
 		PriorityClassName:       priorityClassName,
+		IsPathwaysJob:           isPathwaysJob,
+		Pathways:                pathways,
 	}
 
-	gkeOrchestrator, err := gke.NewGKEOrchestrator()
-	if err != nil {
-		logging.Fatal("Failed to create GKE orchestrator: %v", err)
-	}
-
-	if err := gkeOrchestrator.SubmitJob(jobDef); err != nil {
+	if err := submitGKEJob(jobDef); err != nil {
 		logging.Fatal("gcluster job submit failed: %v", err)
 	}
+}
+
+func submitGKEJob(jobDef orchestrator.JobDefinition) error {
+	gkeOrchestrator, err := gke.NewGKEOrchestrator()
+	if err != nil {
+		return fmt.Errorf("failed to create GKE orchestrator: %v", err)
+	}
+
+	if outputManifest == "" {
+		return gkeOrchestrator.SubmitJob(jobDef)
+	}
+
+	fullImageName, err := gkeOrchestrator.BuildContainerImage(jobDef.ProjectID, jobDef.BaseImage, jobDef.BuildContext, jobDef.Platform, jobDef.ImageName)
+	if err != nil {
+		return fmt.Errorf("failed to build container image: %v", err)
+	}
+
+	var manifestContent string
+	if jobDef.IsPathwaysJob {
+		manifestContent, err = gkeOrchestrator.GeneratePathwaysManifest(jobDef, fullImageName)
+		if err != nil {
+			return fmt.Errorf("failed to generate pathways manifest: %v", err)
+		}
+	} else {
+		manifestOpts, err := gkeOrchestrator.PrepareManifestOptions(jobDef, fullImageName)
+		if err != nil {
+			return fmt.Errorf("failed to prepare manifest options: %v", err)
+		}
+		manifestContent, err = gkeOrchestrator.GenerateGKEManifest(manifestOpts)
+		if err != nil {
+			return fmt.Errorf("failed to generate GKE manifest: %v", err)
+		}
+	}
+	return gkeOrchestrator.ApplyManifest(manifestContent, outputManifest, jobDef.WorkloadName)
 }

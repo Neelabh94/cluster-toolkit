@@ -359,7 +359,226 @@ Use a specific scheduler (e.g., `gke.io/topology-aware-auto`) using `--scheduler
   --scheduler gke.io/topology-aware-auto
 ```
 
-## 9. Cleanup
+## 9. Sophisticated Workloads: MaxText Llama3.1-8B
+
+This section describes how to deploy a more complex workload, specifically training a Llama3.1-8B model using MaxText on a TPU v6e cluster.
+
+### 9.1 Prepare MaxText Workload Directory
+
+Create a directory named `maxtext_workload_v6e` and place the following files inside it.
+
+#### `cluster-toolkit/maxtext_workload_v6e/requirements.txt`
+
+```text
+# This is your requirements.txt file
+```
+
+#### `cluster-toolkit/maxtext_workload_v6e/Dockerfile`
+
+```dockerfile
+# Use the recommended base image
+FROM us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:jax0.6.1-rev1
+
+# Set the working directory
+WORKDIR /deps
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y dnsutils
+
+# Install MaxText dependencies
+RUN pip install google-cloud-monitoring
+
+# Clone MaxText
+RUN git clone https://github.com/AI-Hypercomputer/maxtext.git /app \
+    && cd /app \
+    && git checkout tpu-recipes-v0.1.4
+
+# Skip explicit pip install because base image has prerequisites
+
+# Set working directory to MaxText root for the runner
+WORKDIR /app
+
+# Copy the wrapper script
+COPY run_maxtext.sh /app/run_maxtext.sh
+RUN chmod +x /app/run_maxtext.sh
+
+# Entrypoint is left to default or overridden by gcluster
+```
+
+#### `cluster-toolkit/maxtext_workload_v6e/run_maxtext.sh`
+
+```bash
+#!/bin/bash
+
+# Exit on error
+set -e
+
+echo "Starting MaxText Workload..."
+
+# 1. Set environment variables
+# Combine all the required XLA flags into LIBTPU_INIT_ARGS
+export LIBTPU_INIT_ARGS=" --xla_tpu_scoped_vmem_limit_kib=98304 --xla_tpu_use_minor_sharding_for_major_trivial_input=true --xla_tpu_relayout_group_size_threshold_for_reduce_scatter=1 --xla_tpu_assign_all_reduce_scatter_layout=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_enable_async_collective_fusion_fuse_all_reduce=false --xla_tpu_enable_sparse_core_collective_offload_all_reduce=true --xla_tpu_enable_all_reduce_offload_tracing=true --xla_tpu_use_tc_device_shape_on_sc=true --xla_sc_enable_instruction_fusion=false --xsc_disjoint_spmem=false --xla_sc_disable_megacore_partitioning=true --2a886c8_chip_config_name=megachip_tccontrol --xla_tpu_enable_all_experimental_scheduler_features=true --xla_tpu_enable_scheduler_memory_pressure_tracking=true --xla_tpu_host_transfer_overlap_limit=24 --xla_tpu_aggressive_opt_barrier_removal=ENABLED --xla_lhs_prioritize_async_depth_over_stall=ENABLED --xla_tpu_enable_ag_backward_pipelining=true --xla_should_allow_loop_variant_parameter_in_chain=ENABLED --xla_should_add_loop_invariant_op_in_chain=ENABLED --xla_max_concurrent_host_send_recv=100 --xla_tpu_scheduler_percent_shared_memory_limit=100 --xla_latency_hiding_scheduler_rerun=2 --xla_jf_spmd_threshold_for_windowed_einsum_mib=1000000"
+
+export JAX_PLATFORMS="tpu,cpu"
+export ENABLE_PJRT_COMPATIBILITY=true
+
+# 2. Extract arguments
+OUTPUT_DIR=${1}
+if [ -z "$OUTPUT_DIR" ]; then
+  echo "Error: Output directory argument missing."
+  echo "Usage: $0 <output_gcs_bucket>"
+  exit 1
+fi
+
+MODEL_NAME=${2:-"llama3.1-8b"}
+
+echo "LIBTPU_INIT_ARGS=$LIBTPU_INIT_ARGS"
+echo "OUTPUT_DIR=$OUTPUT_DIR"
+echo "MODEL_NAME=$MODEL_NAME"
+
+# 3. Run training
+python3 -m MaxText.train MaxText/configs/base.yml \
+    per_device_batch_size=3 \
+    ici_fsdp_parallelism=-1 \
+    remat_policy=custom \
+    decoder_layer_input=offload \
+    out_proj=offload \
+    query_proj=offload \
+    key_proj=offload \
+    value_proj=offload \
+    max_target_length=8192 \
+    attention=flash \
+    use_iota_embed=True \
+    dataset_path=gs://max-datasets-rogue \
+    dataset_type=synthetic \
+    enable_checkpointing=False \
+    sa_block_q=2048 \
+    sa_block_kv=2048 \
+    sa_block_kv_compute=2048 \
+    sa_block_q_dkv=2048 \
+    sa_block_kv_dkv=2048 \
+    sa_block_kv_dkv_compute=2048 \
+    sa_block_q_dq=2048 \
+    sa_block_kv_dq=2048 \
+    sa_use_fused_bwd_kernel=True \
+    profiler=xplane \
+    skip_first_n_steps_for_profiler=10 \
+    profiler_steps=5 \
+    steps=20 \
+    monitor_goodput=True \
+    enable_goodput_recording=True \
+    model_name=$MODEL_NAME \
+    base_output_directory=$OUTPUT_DIR \
+    use_vertex_tensorboard=false
+```
+
+#### `cluster-toolkit/maxtext_workload_v6e/build.sh`
+
+```bash
+#!/bin/bash
+
+# Get current project
+PROJECT=$(gcloud config get-value project)
+
+if [ -z "$PROJECT" ]; then
+  echo "Error: Could not determine GCP project. Please run 'gcloud config set project <PROJECT_ID>'"
+  exit 1
+fi
+
+IMAGE_NAME=gcr.io/$PROJECT/maxtext-runner:latest
+
+echo "Building image $IMAGE_NAME using Cloud Build..."
+gcloud builds submit --tag $IMAGE_NAME .
+
+echo "Image built successfully!"
+echo "You can now submit the job with:"
+echo "  gcluster job submit --image $IMAGE_NAME --command 'bash run_maxtext.sh <OUTPUT_DIR>'"
+```
+
+#### `cluster-toolkit/maxtext_workload_v6e/submit.sh`
+
+```bash
+#!/bin/bash
+
+# Configuration - UPDATE THESE
+CLUSTER_NAME="v6e-xpkgsc"
+ZONE="southamerica-west1"
+OUTPUT_DIR="gs://gke-aishared-gsc-dev/maxtext_output"
+
+# Look up project
+PROJECT=$(gcloud config get-value project)
+
+if [ -z "$PROJECT" ]; then
+  echo "Error: Could not determine GCP project. Please run 'gcloud config set project <PROJECT_ID>'"
+  exit 1
+fi
+
+IMAGE_NAME=gcr.io/$PROJECT/maxtext-runner:latest
+
+echo "Ensuring permissions for $SA_NAME..."
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:v6e-xpkgsc-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/logging.logWriter" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:v6e-xpkgsc-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/storage.admin" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:v6e-xpkgsc-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/monitoring.metricWriter" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:v6e-xpkgsc-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/logging.viewer" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:v6e-xpkgsc-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/storage.objectViewer" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:v6e-xpkgsc-gke-np-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/artifactregistry.reader" --quiet
+
+echo "Submitting MaxText job to cluster $CLUSTER_NAME..."
+
+# Navigate to cluster-toolkit root if running from maxtext_workload_v6e
+if [ -f "../gcluster" ]; then
+  GCLUSTER="../gcluster"
+else
+  GCLUSTER="./gcluster"
+fi
+
+$GCLUSTER job submit \
+    --name maxtext-llama3-1-final-v6e8-2 \
+    --cluster $CLUSTER_NAME \
+    --cluster-region $ZONE \
+    --image $IMAGE_NAME \
+    --command "cd /app && pip install psutil jaxtyping tiktoken sentencepiece ray fastapi uvicorn portpicker pydantic ninja Pillow gcsfs omegaconf jsonlines PyYAML safetensors tabulate tensorstore transformers datasets evaluate nltk pandas ml_collections ml_dtypes pathwaysutils orbax grain tensorflow_text tensorflow_datasets tqdm && sed -i 's/use_vertex_tensorboard=false/use_vertex_tensorboard=false run_name=llama3-1-v6e8-test1/g' run_maxtext.sh && bash run_maxtext.sh $OUTPUT_DIR" \
+    --accelerator v6e-8 \
+    --nodes 1 \
+    --vms-per-slice 2 \
+    --topology 2x4 \
+    --priority medium
+    --service-account workload-identity-k8s-sa
+```
+
+### 9.2 Build and Submit
+
+```bash
+cd maxtext_workload_v6e
+./build.sh
+./submit.sh
+```
+
+### 9.3 Verify Job and Logs
+
+You can verify the job status and check logs using `gcluster` or `kubectl`.
+
+**Using `gcluster`**:
+
+```bash
+# List jobs
+./gcluster job list --project <YOUR_PROJECT_ID> --cluster v6e-xpkgsc --cluster-region southamerica-west1
+
+# View logs
+./gcluster job logs maxtext-llama3-1-final-v6e8-2 --project <YOUR_PROJECT_ID> --cluster v6e-xpkgsc --cluster-region southamerica-west1
+```
+
+**Using `kubectl`**:
+
+```bash
+# Get pods
+kubectl get pods --namespace default -l jobset.sigs.k8s.io/jobset-name=maxtext-llama3-1-final-v6e8-2
+
+# View logs for a specific pod
+kubectl logs <POD_NAME> --namespace default
+```
+
+## 10. Cleanup
 
 To avoid incurring unnecessary costs, destroy the deployed GKE cluster and its resources:
 

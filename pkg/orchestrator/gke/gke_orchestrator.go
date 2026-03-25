@@ -974,6 +974,9 @@ func (g *GKEOrchestrator) removeDescriptionFields(data map[interface{}]interface
 }
 
 func (g *GKEOrchestrator) GenerateGKENodeSelectorLabel(acceleratorType string) string {
+	if strings.HasPrefix(acceleratorType, "v6e-") {
+		return "tpu-v6e-slice"
+	}
 	switch acceleratorType {
 	case "nvidia-tesla-a100":
 		return "nvidia-tesla-a100"
@@ -1036,7 +1039,8 @@ func (g *GKEOrchestrator) setManifestDefaults(opts *ManifestOptions) {
 }
 
 func (g *GKEOrchestrator) calculateResourceLimits(acceleratorType string) (cpu, mem, gpu, tpu string) {
-	switch acceleratorType {
+	mappedAcceleratorType := g.GenerateGKENodeSelectorLabel(acceleratorType)
+	switch mappedAcceleratorType {
 	case "nvidia-h100-mega-80gb", "nvidia-h100-80gb":
 		return "208", "1000Gi", "8", ""
 	case "nvidia-gb200":
@@ -1048,14 +1052,14 @@ func (g *GKEOrchestrator) calculateResourceLimits(acceleratorType string) (cpu, 
 	case "tpu-v4-podslice", "tpu-v5p-slice", "tpu-v5-lite-podslice", "tpu-v5-lite-device":
 		return "1", "4Gi", "", "4"
 	case "tpu-v6e-slice":
-		return "16", "100Gi", "", "4"
+		return "48", "240Gi", "", "4"
 	case "":
 		return "0.5", "512Mi", "", ""
 	default:
-		if strings.Contains(strings.ToLower(acceleratorType), "nvidia") {
+		if strings.Contains(strings.ToLower(mappedAcceleratorType), "nvidia") {
 			return "1", "4Gi", "1", ""
-		} else if strings.Contains(strings.ToLower(acceleratorType), "tpu") {
-			return "1", "4Gi", "", "4"
+		} else if strings.Contains(strings.ToLower(mappedAcceleratorType), "tpu") || (len(mappedAcceleratorType) >= 2 && mappedAcceleratorType[0] == 'v' && mappedAcceleratorType[1] >= '0' && mappedAcceleratorType[1] <= '9') {
+			return "48", "240Gi", "", "4"
 		} else {
 			return "0.5", "512Mi", "", ""
 		}

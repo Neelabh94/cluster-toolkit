@@ -151,6 +151,7 @@ func (d *DefaultExecutor) ExecuteCommand(name string, args ...string) shell.Comm
 
 type GKEOrchestrator struct {
 	executor Executor
+	dynamicClient dynamic.Interface
 }
 
 func NewGKEOrchestrator() (*GKEOrchestrator, error) {
@@ -1510,6 +1511,9 @@ func (g *GKEOrchestrator) GetJobLogs(name string, opts orchestrator.LogsOptions)
 }
 
 func (g *GKEOrchestrator) getDynamicClient() (dynamic.Interface, error) {
+	if g.dynamicClient != nil {
+		return g.dynamicClient, nil
+	}
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	configOverrides := &clientcmd.ConfigOverrides{}

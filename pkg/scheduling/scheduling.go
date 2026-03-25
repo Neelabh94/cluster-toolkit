@@ -88,7 +88,15 @@ func GetTolerations(acceleratorType string) []corev1.Toleration {
 }
 
 func isTPU(acceleratorType string) bool {
-	return len(acceleratorType) > 3 && (acceleratorType[:3] == "tpu" || contains(acceleratorType, "tpu"))
+	if len(acceleratorType) > 3 && (acceleratorType[:3] == "tpu" || contains(acceleratorType, "tpu")) {
+		return true
+	}
+	if len(acceleratorType) >= 2 && acceleratorType[0] == 'v' {
+		if acceleratorType[1] >= '0' && acceleratorType[1] <= '9' {
+            return true
+		}
+	}
+	return false
 }
 
 func contains(s, substr string) bool {

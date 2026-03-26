@@ -18,6 +18,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	clusterName     string
+	clusterLocation string
+	projectID       string
+)
+
 // JobCmd represents the base command for job-related operations
 var JobCmd = &cobra.Command{
 	Use:   "job",
@@ -26,6 +32,13 @@ var JobCmd = &cobra.Command{
 }
 
 func init() {
+	JobCmd.PersistentFlags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
+	JobCmd.PersistentFlags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
+	JobCmd.PersistentFlags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
+
+	_ = JobCmd.MarkPersistentFlagRequired("cluster")
+	_ = JobCmd.MarkPersistentFlagRequired("cluster-region")
+
 	JobCmd.AddCommand(SubmitCmd)
 	JobCmd.AddCommand(CancelJobCmd)
 	JobCmd.AddCommand(ListWorkloadsCmd)

@@ -14,7 +14,6 @@
 
 package orchestrator
 
-// In pkg/orchestrator/orchestrator.go
 type PathwaysJobDefinition struct {
 	// Core Pathways Images
 	ProxyServerImage string // Default: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest

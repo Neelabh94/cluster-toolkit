@@ -31,12 +31,6 @@ var LogsCmd = &cobra.Command{
 }
 
 func init() {
-	LogsCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
-	LogsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	LogsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
-
-	_ = LogsCmd.MarkFlagRequired("cluster")
-	_ = LogsCmd.MarkFlagRequired("cluster-region")
 }
 
 func runLogsCmd(cmd *cobra.Command, args []string) {

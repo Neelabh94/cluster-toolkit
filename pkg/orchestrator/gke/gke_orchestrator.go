@@ -31,6 +31,7 @@ import (
 	"text/template"
 	"time"
 
+	container "google.golang.org/api/container/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -150,6 +151,7 @@ func (d *DefaultExecutor) ExecuteCommand(name string, args ...string) shell.Comm
 
 type GKEOrchestrator struct {
 	executor Executor
+	dynamicClient dynamic.Interface
 }
 
 func NewGKEOrchestrator() (*GKEOrchestrator, error) {
@@ -1333,6 +1335,118 @@ func (g *GKEOrchestrator) ListJobs(opts orchestrator.ListOptions) ([]orchestrato
 	return jobs, nil
 }
 
+func (g *GKEOrchestrator) ListVolumes(opts orchestrator.ListOptions) ([]orchestrator.VolumeStatus, error) {
+	projectID, err := g.getProjectID(opts.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	opts.ProjectID = projectID
+
+	var clusters []string
+	if opts.ClusterName != "" {
+		clusters = []string{opts.ClusterName}
+	} else {
+		logging.Info("No cluster name provided. Discovering clusters in project '%s', region '%s'...", opts.ProjectID, opts.ClusterLocation)
+		clusters, err = g.ListClusters(opts.ProjectID, opts.ClusterLocation)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list clusters: %w", err)
+		}
+		if len(clusters) == 0 {
+			logging.Info("No clusters found in project '%s', region '%s'.", opts.ProjectID, opts.ClusterLocation)
+			return []orchestrator.VolumeStatus{}, nil
+		}
+		logging.Info("Found clusters: %v", clusters)
+	}
+
+	var allVolumes []orchestrator.VolumeStatus
+	for _, cluster := range clusters {
+		volumes, err := g.listVolumesForCluster(cluster, opts)
+		if err != nil {
+			logging.Info("Warning: Failed to list volumes for cluster '%s': %v", cluster, err)
+			continue
+		}
+		allVolumes = append(allVolumes, volumes...)
+	}
+
+	return allVolumes, nil
+}
+
+func (g *GKEOrchestrator) listVolumesForCluster(clusterName string, opts orchestrator.ListOptions) ([]orchestrator.VolumeStatus, error) {
+	logging.Info("Listing volume resources in cluster '%s'...", clusterName)
+	if err := g.configureKubectl(clusterName, opts.ClusterLocation, opts.ProjectID); err != nil {
+		return nil, err
+	}
+
+	client, err := g.getDynamicClient()
+	if err != nil {
+		return nil, err
+	}
+
+	var volumes []orchestrator.VolumeStatus
+
+	// List GKE PVCs with ghpc_role=file-system label
+	gvrPVC := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
+	listPVC, err := client.Resource(gvrPVC).Namespace("").List(context.TODO(), metav1.ListOptions{
+		LabelSelector: "ghpc_role=file-system",
+	})
+	if err == nil {
+		for _, item := range listPVC.Items {
+			name := item.GetName()
+			if opts.NameContains != "" && !strings.Contains(name, opts.NameContains) {
+				continue
+			}
+
+			// Try to get Type from labels (ghpc_module)
+			volType := ""
+			metadata, _ := item.Object["metadata"].(map[string]interface{})
+			if labels, ok := metadata["labels"].(map[string]interface{}); ok {
+				volType, _ = labels["ghpc_module"].(string)
+			}
+
+			// Fallback to StorageClassName
+			if volType == "" {
+				spec, _ := item.Object["spec"].(map[string]interface{})
+				volType, _ = spec["storageClassName"].(string)
+			}
+
+			if volType == "" {
+				volType = "Standard"
+			}
+
+			volumes = append(volumes, orchestrator.VolumeStatus{
+				Name:       name,
+				Type:       volType,
+				MountPoint: fmt.Sprintf("/mnt/data/%s", name),
+				Cluster:    clusterName,
+			})
+		}
+	} else {
+		return nil, fmt.Errorf("failed to list PVCs: %w", err)
+	}
+
+	return volumes, nil
+}
+
+func (g *GKEOrchestrator) ListClusters(projectID, location string) ([]string, error) {
+	ctx := context.Background()
+	svc, err := container.NewService(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GKE service: %w", err)
+	}
+
+	parent := fmt.Sprintf("projects/%s/locations/%s", projectID, location)
+	resp, err := svc.Projects.Locations.Clusters.List(parent).Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list clusters using GKE API: %w", err)
+	}
+
+	var clusterNames []string
+	for _, c := range resp.Clusters {
+		clusterNames = append(clusterNames, c.Name)
+	}
+	return clusterNames, nil
+}
+
 func (g *GKEOrchestrator) CancelJob(name string, opts orchestrator.CancelOptions) error {
 	logging.Info("Deleting job '%s' in cluster '%s'...", name, opts.ClusterName)
 	if err := g.configureKubectl(opts.ClusterName, opts.ClusterLocation, opts.ProjectID); err != nil {
@@ -1401,6 +1515,9 @@ func (g *GKEOrchestrator) GetJobLogs(name string, opts orchestrator.LogsOptions)
 }
 
 func (g *GKEOrchestrator) getDynamicClient() (dynamic.Interface, error) {
+	if g.dynamicClient != nil {
+		return g.dynamicClient, nil
+	}
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	configOverrides := &clientcmd.ConfigOverrides{}

@@ -16,9 +16,12 @@ package gke
 
 import (
 	"hpc-toolkit/pkg/orchestrator"
+	"hpc-toolkit/pkg/orchestrator/gke/mock"
 	"hpc-toolkit/pkg/shell"
 	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type MockExecutor struct {
@@ -326,6 +329,100 @@ func TestWaitForJobCompletion(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tt.expectedError) {
 					t.Errorf("Expected error containing %q, but got: %v", tt.expectedError, err)
 				}
+			}
+		})
+	}
+}
+
+func TestListVolumes(t *testing.T) {
+	tests := []struct {
+		name          string
+		pvc           *unstructured.Unstructured
+		expectedType  string
+		expectedMount string
+	}{
+		{
+			name: "Volume with ghpc_module label",
+			pvc: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "PersistentVolumeClaim",
+					"metadata": map[string]interface{}{
+						"name":      "test-pvc-1",
+						"namespace": "default",
+						"labels": map[string]interface{}{
+							"ghpc_role":   "file-system",
+							"ghpc_module": "gke-storage",
+						},
+					},
+					"spec": map[string]interface{}{
+						"storageClassName": "standard-rwo",
+					},
+				},
+			},
+			expectedType:  "gke-storage",
+			expectedMount: "/mnt/data/test-pvc-1",
+		},
+		{
+			name: "Volume with storageClassName fallback",
+			pvc: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "PersistentVolumeClaim",
+					"metadata": map[string]interface{}{
+						"name":      "test-pvc-2",
+						"namespace": "default",
+						"labels": map[string]interface{}{
+							"ghpc_role": "file-system",
+						},
+					},
+					"spec": map[string]interface{}{
+						"storageClassName": "premium-rwo",
+					},
+				},
+			},
+			expectedType:  "premium-rwo",
+			expectedMount: "/mnt/data/test-pvc-2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pvcList := &unstructured.UnstructuredList{
+				Items: []unstructured.Unstructured{*tt.pvc},
+			}
+			fc := &mock.MockDynamicClient{PvcList: pvcList}
+
+			mockResponses := map[string][]shell.CommandResult{
+				"gcloud container clusters get-credentials": {{ExitCode: 0}},
+				"gcloud config get-value project":           {{ExitCode: 0, Stdout: "test-project"}},
+			}
+			orc := &GKEOrchestrator{
+				executor:      NewMockExecutor(mockResponses),
+				dynamicClient: fc,
+			}
+
+			opts := orchestrator.ListOptions{
+				ClusterName:     "test-cluster",
+				ClusterLocation: "us-central1",
+				ProjectID:       "test-project",
+			}
+
+			volumes, err := orc.ListVolumes(opts)
+			if err != nil {
+				t.Fatalf("ListVolumes failed: %v", err)
+			}
+
+			if len(volumes) != 1 {
+				t.Fatalf("expected 1 volume, got %d", len(volumes))
+			}
+
+			vol := volumes[0]
+			if vol.Name != tt.pvc.GetName() {
+				t.Errorf("expected name %s, got %s", tt.pvc.GetName(), vol.Name)
+			}
+			if vol.Type != tt.expectedType {
+				t.Errorf("expected type %s, got %s", tt.expectedType, vol.Type)
 			}
 		})
 	}

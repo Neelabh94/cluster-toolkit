@@ -95,11 +95,11 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 		{
 			name:            "TPU v6e slice",
 			acceleratorType: "tpu-v6e-slice",
-			cpuLimit:        "16",
-			memoryLimit:     "128Gi",
+			cpuLimit:        "48",
+			memoryLimit:     "240Gi",
 			tpuLimit:        "4",
 			wantLabels:      []string{"cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice"},
-			wantLimits:      []string{"google.com/tpu: 4", "cpu: 16", "memory: 100Gi"},
+			wantLimits:      []string{"google.com/tpu: 4", "cpu: 48", "memory: 240Gi"},
 			dontWantLimits:  []string{"nvidia.com/gpu"},
 		},
 		{
@@ -124,11 +124,11 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 		{
 			name:            "Fallback TPU",
 			acceleratorType: "unknown-tpu-version",
-			cpuLimit:        "1",
-			memoryLimit:     "4Gi",
+			cpuLimit:        "48",
+			memoryLimit:     "240Gi",
 			tpuLimit:        "4",
 			wantLabels:      []string{"cloud.google.com/gke-accelerator: unknown-tpu-version"},
-			wantLimits:      []string{"google.com/tpu: 4", "cpu: 1", "memory: 4Gi"},
+			wantLimits:      []string{"google.com/tpu: 4", "cpu: 48", "memory: 240Gi"},
 			dontWantLimits:  []string{"nvidia.com/gpu"},
 		},
 	}

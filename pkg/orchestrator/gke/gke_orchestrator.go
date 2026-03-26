@@ -1111,32 +1111,40 @@ func (g *GKEOrchestrator) setManifestDefaults(opts *ManifestOptions) {
 	}
 }
 
+var defaultResourceLimits = map[string][4]string{
+	"nvidia-h100-mega-80gb": {"208", "1000Gi", "8", ""},
+	"nvidia-h100-80gb":      {"208", "1000Gi", "8", ""},
+	"nvidia-gb200":          {"208", "1000Gi", "4", ""},
+	"nvidia-a100-80gb":      {"12", "85Gi", "1", ""},
+	"nvidia-tesla-a100":     {"12", "85Gi", "1", ""},
+	"nvidia-l4":             {"4", "24Gi", "1", ""},
+	"tpu-v4-podslice":       {"1", "4Gi", "", "4"},
+	"tpu-v5p-slice":         {"1", "4Gi", "", "4"},
+	"tpu-v5-lite-podslice":  {"1", "4Gi", "", "4"},
+	"tpu-v5-lite-device":    {"1", "4Gi", "", "4"},
+	"tpu-v6e-slice":         {"48", "240Gi", "", "4"},
+	"":                      {"0.5", "512Mi", "", ""},
+}
+
+func isTPUFallback(mapped string) bool {
+	lower := strings.ToLower(mapped)
+	return strings.Contains(lower, "tpu") || (len(lower) >= 2 && lower[0] == 'v' && lower[1] >= '0' && lower[1] <= '9')
+}
+
 func (g *GKEOrchestrator) calculateResourceLimits(acceleratorType string) (cpu, mem, gpu, tpu string) {
-	mappedAcceleratorType := g.GenerateGKENodeSelectorLabel(acceleratorType)
-	switch mappedAcceleratorType {
-	case "nvidia-h100-mega-80gb", "nvidia-h100-80gb":
-		return "208", "1000Gi", "8", ""
-	case "nvidia-gb200":
-		return "208", "1000Gi", "4", ""
-	case "nvidia-a100-80gb", "nvidia-tesla-a100":
-		return "12", "85Gi", "1", "" // Assuming 1/8th of A100 node approx? Or keep 1/4Gi if not specified in test.
-	case "nvidia-l4":
-		return "4", "24Gi", "1", ""
-	case "tpu-v4-podslice", "tpu-v5p-slice", "tpu-v5-lite-podslice", "tpu-v5-lite-device":
-		return "1", "4Gi", "", "4"
-	case "tpu-v6e-slice":
-		return "48", "240Gi", "", "4"
-	case "":
-		return "0.5", "512Mi", "", ""
-	default:
-		if strings.Contains(strings.ToLower(mappedAcceleratorType), "nvidia") {
-			return "1", "4Gi", "1", ""
-		} else if strings.Contains(strings.ToLower(mappedAcceleratorType), "tpu") || (len(mappedAcceleratorType) >= 2 && mappedAcceleratorType[0] == 'v' && mappedAcceleratorType[1] >= '0' && mappedAcceleratorType[1] <= '9') {
-			return "48", "240Gi", "", "4"
-		} else {
-			return "0.5", "512Mi", "", ""
-		}
+	mapped := g.GenerateGKENodeSelectorLabel(acceleratorType)
+
+	if limits, exists := defaultResourceLimits[mapped]; exists {
+		return limits[0], limits[1], limits[2], limits[3]
 	}
+
+	if strings.Contains(strings.ToLower(mapped), "nvidia") {
+		return "1", "4Gi", "1", ""
+	}
+	if isTPUFallback(mapped) {
+		return "48", "240Gi", "", "4"
+	}
+	return "0.5", "512Mi", "", ""
 }
 
 func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, updatedCommand string) interface{} {

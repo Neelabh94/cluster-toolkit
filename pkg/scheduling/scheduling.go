@@ -93,7 +93,7 @@ func isTPU(acceleratorType string) bool {
 	}
 	if len(acceleratorType) >= 2 && acceleratorType[0] == 'v' {
 		if acceleratorType[1] >= '0' && acceleratorType[1] <= '9' {
-            return true
+			return true
 		}
 	}
 	return false

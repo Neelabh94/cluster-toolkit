@@ -16,6 +16,8 @@ package job
 
 import (
 	"fmt"
+	"net/url"
+
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/orchestrator/gke"
@@ -196,6 +198,10 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 	if err := submitGKEJob(jobDef); err != nil {
 		logging.Fatal("gcluster job submit failed: %v", err)
 	}
+
+	if outputManifest == "" {
+		printPantheonLinks(jobDef)
+	}
 }
 
 func parseVolumeFlag(vStrs []string) []orchestrator.VolumeDefinition {
@@ -257,4 +263,25 @@ func submitGKEJob(jobDef orchestrator.JobDefinition) error {
 		}
 	}
 	return gkeOrchestrator.ApplyManifest(manifestContent, outputManifest, jobDef.WorkloadName)
+}
+
+func printPantheonLinks(job orchestrator.JobDefinition) {
+	gkeLink := fmt.Sprintf("https://console.cloud.google.com/kubernetes/job/%s/%s/default/%s/details?project=%s",
+		job.ClusterLocation, job.ClusterName, job.WorkloadName, job.ProjectID)
+
+	logging.Info("Follow your workload details here: %s", gkeLink)
+
+	logFilter := fmt.Sprintf(`resource.type="k8s_container"
+resource.labels.project_id="%s"
+resource.labels.location="%s"
+resource.labels.cluster_name="%s"
+resource.labels.namespace_name="default"
+resource.labels.pod_name:"%s-"
+severity>=DEFAULT`, job.ProjectID, job.ClusterLocation, job.ClusterName, job.WorkloadName)
+
+	encodedFilter := url.QueryEscape(logFilter)
+	logsLink := fmt.Sprintf("https://console.cloud.google.com/logs/query;query=%s;storageScope=project;duration=P1D?project=%s",
+		encodedFilter, job.ProjectID)
+
+	logging.Info("View your workload logs in real-time here: %s", logsLink)
 }

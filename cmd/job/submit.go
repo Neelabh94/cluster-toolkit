@@ -32,9 +32,6 @@ var (
 	commandToRun    string
 	acceleratorType string
 	outputManifest  string
-	clusterName     string
-	clusterLocation string
-	projectID       string
 
 	workloadName            string
 	kueueQueueName          string
@@ -105,9 +102,6 @@ func init() {
 	SubmitCmd.Flags().StringVarP(&commandToRun, "command", "e", "", "Command to execute in the container (e.g., 'python train.py'). Required.")
 	SubmitCmd.Flags().StringVarP(&acceleratorType, "accelerator", "a", "", "Type of accelerator to request (e.g., 'nvidia-tesla-a100'). If empty, it will be auto-discovered.")
 	SubmitCmd.Flags().StringVarP(&outputManifest, "dry-run-out", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
-	SubmitCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster to deploy the workload to. Required.")
-	SubmitCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	SubmitCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID. If not provided, it will be inferred from your gcloud configuration.")
 	SubmitCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-image.")
 
 	SubmitCmd.Flags().StringVarP(&workloadName, "name", "n", "", "Name of the workload to create. Required.")
@@ -144,8 +138,6 @@ func init() {
 	SubmitCmd.Flags().StringSliceVar(&volumeStr, "volume", nil, "Volumes to mount (format: <src>:<dest>).")
 
 	_ = SubmitCmd.MarkFlagRequired("command")
-	_ = SubmitCmd.MarkFlagRequired("cluster")
-	_ = SubmitCmd.MarkFlagRequired("cluster-region")
 }
 
 func runSubmitCmd(cmd *cobra.Command, args []string) {
@@ -162,6 +154,11 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 	}
 	if baseImage != "" && buildContext == "" {
 		logging.Fatal("A --build-context must be provided when --base-image is used for a Crane build.")
+	}
+
+	affinity := map[string]string{}
+	if cpuAffinityStr != "" {
+		affinity["cpu-affinity"] = cpuAffinityStr
 	}
 
 	jobDef := orchestrator.JobDefinition{
@@ -183,7 +180,7 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 		TtlSecondsAfterFinished: ttlSecondsAfterFinished,
 		PlacementPolicy:         placementPolicy,
 		NodeSelector:            nodeSelector,
-		Affinity:                map[string]string{"cpu-affinity": cpuAffinityStr},
+		Affinity:                affinity,
 		RestartOnExitCodes:      restartOnExitCodes,
 		ImagePullSecrets:        imagePullSecrets,
 		ServiceAccountName:      serviceAccountName,

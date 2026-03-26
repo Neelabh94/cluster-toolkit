@@ -31,12 +31,6 @@ var CancelJobCmd = &cobra.Command{
 }
 
 func init() {
-	CancelJobCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
-	CancelJobCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	CancelJobCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
-
-	_ = CancelJobCmd.MarkFlagRequired("cluster")
-	_ = CancelJobCmd.MarkFlagRequired("cluster-region")
 }
 
 func runCancelJob(cmd *cobra.Command, args []string) {
@@ -55,6 +49,6 @@ func runCancelJob(cmd *cobra.Command, args []string) {
 	}
 
 	if err := orc.CancelJob(jobName, opts); err != nil {
-		logging.Fatal("Failed to delete job: %v", err)
+		logging.Fatal("Failed to cancel job: %v", err)
 	}
 }

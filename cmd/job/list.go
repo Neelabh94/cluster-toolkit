@@ -39,15 +39,8 @@ var ListWorkloadsCmd = &cobra.Command{
 }
 
 func init() {
-	ListWorkloadsCmd.Flags().StringVar(&clusterName, "cluster", "", "Name of the GKE cluster. Required.")
-	ListWorkloadsCmd.Flags().StringVar(&clusterLocation, "cluster-region", "", "Region of the GKE cluster. Required.")
-	ListWorkloadsCmd.Flags().StringVarP(&projectID, "project", "p", "", "Google Cloud Project ID.")
-
 	ListWorkloadsCmd.Flags().StringVar(&filterStatus, "status", "", "Filter jobs by status (e.g. Running, Failed, Succeeded).")
 	ListWorkloadsCmd.Flags().StringVar(&filterName, "name-contains", "", "Filter jobs by name.")
-
-	_ = ListWorkloadsCmd.MarkFlagRequired("cluster")
-	_ = ListWorkloadsCmd.MarkFlagRequired("cluster-region")
 }
 
 func runListWorkloads(cmd *cobra.Command, args []string) {

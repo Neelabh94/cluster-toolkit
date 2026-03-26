@@ -334,8 +334,8 @@ func (g *GKEOrchestrator) ensureClusterQueueCoverage(localQueueName string) erro
 	patch := `[
 		{"op": "add", "path": "/spec/resourceGroups/0/coveredResources/-", "value": "cpu"},
 		{"op": "add", "path": "/spec/resourceGroups/0/coveredResources/-", "value": "memory"},
-		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "cpu", "nominalQuota": "500"}},
-		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "memory", "nominalQuota": "2000Gi"}}
+		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "cpu", "nominalQuota": "2000"}},
+		{"op": "add", "path": "/spec/resourceGroups/0/flavors/0/resources/-", "value": {"name": "memory", "nominalQuota": "20000Gi"}}
 	]`
 
 	res := g.executor.ExecuteCommand("kubectl", "patch", "clusterqueue", cqName, "--type", "json", "-p", patch)
@@ -1050,6 +1050,9 @@ func (g *GKEOrchestrator) GenerateGKENodeSelectorLabel(acceleratorType string) s
 	if strings.HasPrefix(acceleratorType, "v6e-") {
 		return "tpu-v6e-slice"
 	}
+	if strings.Contains(acceleratorType, "tpu7x") {
+		return "tpu7x"
+	}
 	switch acceleratorType {
 	case "nvidia-tesla-a100":
 		return "nvidia-tesla-a100"
@@ -1123,6 +1126,7 @@ var defaultResourceLimits = map[string][4]string{
 	"tpu-v5-lite-podslice":  {"1", "4Gi", "", "4"},
 	"tpu-v5-lite-device":    {"1", "4Gi", "", "4"},
 	"tpu-v6e-slice":         {"48", "240Gi", "", "4"},
+	"tpu7x":                 {"96", "800Gi", "", "4"},
 	"":                      {"0.5", "512Mi", "", ""},
 }
 
@@ -1600,7 +1604,7 @@ func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptio
 		if nodeSelector == nil {
 			nodeSelector = make(map[string]string)
 		}
-		if strings.Contains(accelLabel, "tpu-v6e") {
+		if strings.Contains(accelLabel, "tpu-v6e") || strings.Contains(accelLabel, "tpu7x") {
 			nodeSelector["cloud.google.com/gke-tpu-accelerator"] = accelLabel
 		} else {
 			nodeSelector["cloud.google.com/gke-accelerator"] = accelLabel

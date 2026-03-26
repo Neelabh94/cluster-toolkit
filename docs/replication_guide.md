@@ -359,7 +359,7 @@ Use a specific scheduler (e.g., `gke.io/topology-aware-auto`) using `--scheduler
   --scheduler gke.io/topology-aware-auto
 ```
 
-## 9. Sophisticated Workloads: MaxText Llama3.1-8B
+## 9. Sophisticated Workloads: MaxText Llama3.1-8B (TPU v6e)
 
 This section describes how to deploy a more complex workload, specifically training a Llama3.1-8B model using MaxText on a TPU v6e cluster.
 
@@ -578,7 +578,263 @@ kubectl get pods --namespace default -l jobset.sigs.k8s.io/jobset-name=maxtext-l
 kubectl logs <POD_NAME> --namespace default
 ```
 
-## 10. Cleanup
+## 10. Sophisticated Workloads: MaxText Llama3.1-8B (TPU v7x)
+
+This section describes how to deploy the MaxText workload specifically optimized for TPU v7x (Ironwood) hardware.
+
+### 10.1 Prepare MaxText v7x Workload Directory
+
+Create a directory named `maxtext_workload_v7x` and place the following files inside it.
+
+#### `cluster-toolkit/maxtext_workload_v7x/requirements.txt`
+
+```text
+psutil
+jaxtyping
+tiktoken
+sentencepiece
+ray
+fastapi
+uvicorn
+portpicker
+pydantic
+ninja
+Pillow
+gcsfs
+omegaconf
+jsonlines
+PyYAML
+safetensors
+tabulate
+tensorstore
+transformers
+datasets
+evaluate
+nltk
+pandas
+ml_collections
+ml_dtypes
+pathwaysutils
+orbax
+grain
+tensorflow_text
+tensorflow_datasets
+tqdm
+```
+
+#### `cluster-toolkit/maxtext_workload_v7x/Dockerfile`
+
+```dockerfile
+# Use the recommended base image for TPU7x
+FROM us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:jax0.8.2-rev1
+
+# Set the working directory
+WORKDIR /deps
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y dnsutils
+
+# Install MaxText dependencies
+RUN pip install google-cloud-monitoring
+
+# Install Python requirements
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# Clone MaxText
+RUN git clone https://github.com/AI-Hypercomputer/maxtext.git /app \
+    && cd /app \
+    && git checkout maxtext-tutorial-v1.0.0
+
+# Set working directory to MaxText root for the runner
+WORKDIR /app
+
+# Copy the wrapper script
+COPY run_maxtext.sh /app/run_maxtext.sh
+RUN chmod +x /app/run_maxtext.sh
+
+# Entrypoint is left to default or overridden by gcluster
+```
+
+#### `cluster-toolkit/maxtext_workload_v7x/run_maxtext.sh`
+
+```bash
+#!/bin/bash
+
+# Exit on error
+set -e
+
+echo "Starting MaxText Workload..."
+
+# 1. Set environment variables
+export ENABLE_PATHWAYS_PERSISTENCE='1'
+# Combine all the required XLA flags into LIBTPU_INIT_ARGS
+export LIBTPU_INIT_ARGS=" --xla_tpu_scoped_vmem_limit_kib=61440 --xla_tpu_bf16_emission_mode=NATIVE_EMISSION --xla_tpu_enable_sparse_core_collective_offload_all_reduce=true --xla_tpu_use_single_sparse_core_for_all_gather_offload=true "
+
+export JAX_PLATFORMS="tpu,cpu"
+export ENABLE_PJRT_COMPATIBILITY=true
+export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+export JAX_TRACEBACK_FILTERING=off
+
+# 2. Extract arguments
+OUTPUT_DIR=${1}
+if [ -z "$OUTPUT_DIR" ]; then
+  echo "Error: Output directory argument missing."
+  echo "Usage: $0 <output_gcs_bucket>"
+  exit 1
+fi
+
+MODEL_NAME=${2:-"llama3.1-8b"}
+
+echo "LIBTPU_INIT_ARGS=$LIBTPU_INIT_ARGS"
+echo "OUTPUT_DIR=$OUTPUT_DIR"
+echo "MODEL_NAME=$MODEL_NAME"
+
+# 3. Run training
+python3 src/MaxText/train.py src/MaxText/configs/base.yml \
+    model_name=$MODEL_NAME \
+    skip_jax_distributed_system=False \
+    dtype=bfloat16 \
+    per_device_batch_size=1 \
+    ici_fsdp_parallelism=64 \
+    max_target_length=4096 \
+    profiler=xplane \
+    profile_periodically_period=10000 \
+    async_checkpointing=False \
+    enable_checkpointing=False \
+    use_iota_embed=True \
+    remat_policy=custom \
+    decoder_layer_input=offload \
+    query_proj=offload \
+    key_proj=offload \
+    value_proj=offload \
+    out_proj=offload \
+    dataset_type=synthetic \
+    opt_type=adamw \
+    mu_dtype=bfloat16 \
+    tokenizer_type=tiktoken \
+    tokenizer_path=assets/tokenizer_llama3.tiktoken \
+    sa_use_fused_bwd_kernel=True \
+    attention=flash \
+    steps=30 \
+    base_output_directory=$OUTPUT_DIR \
+    use_vertex_tensorboard=false
+```
+
+#### `cluster-toolkit/maxtext_workload_v7x/build.sh`
+
+```bash
+#!/bin/bash
+
+# Get current project
+PROJECT=$(gcloud config get-value project)
+
+if [ -z "$PROJECT" ]; then
+  echo "Error: Could not determine GCP project. Please run 'gcloud config set project <PROJECT_ID>'"
+  exit 1
+fi
+
+IMAGE_NAME=gcr.io/$PROJECT/maxtext-runner:latest
+
+echo "Building image $IMAGE_NAME using Cloud Build..."
+gcloud builds submit --tag $IMAGE_NAME .
+
+echo "Image built successfully!"
+echo "You can now submit the job with:"
+echo "  gcluster job submit --image $IMAGE_NAME --command 'bash run_maxtext.sh <OUTPUT_DIR>'"
+```
+
+#### `cluster-toolkit/maxtext_workload_v7x/submit.sh`
+
+```bash
+#!/bin/bash
+
+# Configuration - UPDATE THESE
+CLUSTER_NAME="tpu7xpkv"
+ZONE="us-central1-c"
+OUTPUT_DIR="gs://gke-aishared-gsc-dev/maxtext_output_7x"
+
+# Look up project
+PROJECT=$(gcloud config get-value project)
+
+if [ -z "$PROJECT" ]; then
+  echo "Error: Could not determine GCP project. Please run 'gcloud config set project <PROJECT_ID>'"
+  exit 1
+fi
+
+IMAGE_NAME=gcr.io/$PROJECT/maxtext-runner:latest
+
+echo "Ensuring permissions for tpu7xpkv-gke-wl-sa..."
+# Note: Ensure the SA matches the one created by the 7x blueprint (tpu7xpkv-gke-wl-sa)
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tpu7xpkv-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/logging.logWriter" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tpu7xpkv-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/storage.admin" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tpu7xpkv-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/monitoring.metricWriter" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tpu7xpkv-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/logging.viewer" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tpu7xpkv-gke-wl-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/storage.objectViewer" --quiet
+
+echo "Ensuring permissions for node pool service account..."
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tpu7xpkv-gke-np-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/artifactregistry.reader" --quiet
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tpu7xpkv-gke-np-sa@${PROJECT}.iam.gserviceaccount.com" --role="roles/storage.objectViewer" --quiet
+
+echo "Submitting MaxText job to cluster $CLUSTER_NAME..."
+
+# Navigate to cluster-toolkit root if running from maxtext_workload_v7x
+if [ -f "../gcluster" ]; then
+  GCLUSTER="../gcluster"
+else
+  GCLUSTER="./gcluster"
+fi
+
+$GCLUSTER job submit \
+    --name maxtext-llama3-1-final-tpu7x-32 \
+    --cluster $CLUSTER_NAME \
+    --cluster-region us-central1 \
+    --image $IMAGE_NAME \
+    --command "cd /app && sed -i 's/use_vertex_tensorboard=false/use_vertex_tensorboard=false run_name=llama3-1-7x-test1/g' run_maxtext.sh && bash run_maxtext.sh $OUTPUT_DIR" \
+    --accelerator tpu7x-32 \
+    --nodes 1 \
+    --vms-per-slice 8 \
+    --topology 2x4x4 \
+    --priority medium \
+    --service-account workload-identity-k8s-sa
+```
+
+### 10.2 Build and Submit
+
+```bash
+cd maxtext_workload_v7x
+./build.sh
+./submit.sh
+```
+
+### 10.3 Verify Job and Logs
+
+TPU v7x utilizes Megacore, which initializes 2 logical devices per chip. For a 32-chip slice (2x4x4 topology), you should see 64 logical devices in the logs.
+
+**Using `gcluster`**:
+
+```bash
+# List jobs
+./gcluster job list --project <YOUR_PROJECT_ID> --cluster tpu7xpkv --cluster-region us-central1
+
+# View logs
+./gcluster job logs maxtext-llama3-1-final-tpu7x-32 --project <YOUR_PROJECT_ID> --cluster tpu7xpkv --cluster-region us-central1
+```
+
+**Verification Highlights**:
+In the logs, look for successful JAX initialization and step processing:
+
+```text
+System Information: Jax Version: 0.8.2
+System Information: Jax Backend: PJRT C API
+TFRT TPU7x
+Num_devices: 64, shape (1, 1, 64, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+...
+completed step: 4, seconds: 1.182, TFLOP/s/device: 167.154, Tokens/s/device: 3464.384, loss: 10.187
+completed step: 5, seconds: 1.186, TFLOP/s/device: 166.597, Tokens/s/device: 3452.840, loss: 9.184
+```
+
+## 11. Cleanup
 
 To avoid incurring unnecessary costs, destroy the deployed GKE cluster and its resources:
 

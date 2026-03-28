@@ -485,4 +485,87 @@ func TestFetchMachineCapacity(t *testing.T) {
 		})
 	}
 }
+func TestVerifySuperSlicingActive(t *testing.T) {
+	tests := []struct {
+		name          string
+		opts          ManifestOptions
+		mockResponses map[string][]shell.CommandResult
+		envVars       map[string]string
+		wantResult    bool
+	}{
+		{
+			name: "Success - Super-slicing active",
+			opts: ManifestOptions{
+				ClusterName:     "test-cluster",
+				ClusterLocation: "us-central1-a",
+				AcceleratorType: "tpu-v6e-slice",
+			},
+			envVars: map[string]string{"GKE_NODE_POOL_NAME": "test-pool"},
+			mockResponses: map[string][]shell.CommandResult{
+				"gcloud container node-pools describe test-pool --cluster=test-cluster --zone=us-central1-a --format=json(placementPolicy)": {
+					{ExitCode: 0, Stdout: `{"placementPolicy": {"acceleratorTopologyMode": "PROVISION_ONLY"}}`},
+				},
+				"kubectl get crd topologies.kueue.x-k8s.io": {
+					{ExitCode: 0},
+				},
+			},
+			wantResult: true,
+		},
+		{
+			name: "Failure - No TPU",
+			opts: ManifestOptions{
+				ClusterName:     "test-cluster",
+				ClusterLocation: "us-central1-a",
+				AcceleratorType: "nvidia-l4",
+			},
+			envVars:       nil,
+			mockResponses: nil,
+			wantResult:    false,
+		},
+		{
+			name: "Failure - No Node Pool set",
+			opts: ManifestOptions{
+				ClusterName:     "test-cluster",
+				ClusterLocation: "us-central1-a",
+				AcceleratorType: "tpu-v6e-slice",
+			},
+			envVars:       nil,
+			mockResponses: nil,
+			wantResult:    false,
+		},
+		{
+			name: "Failure - gcloud fails",
+			opts: ManifestOptions{
+				ClusterName:     "test-cluster",
+				ClusterLocation: "us-central1-a",
+				AcceleratorType: "tpu-v6e-slice",
+			},
+			envVars: map[string]string{"GKE_NODE_POOL_NAME": "test-pool"},
+			mockResponses: map[string][]shell.CommandResult{
+				"gcloud container node-pools describe test-pool --cluster=test-cluster --zone=us-central1-a --format=json(placementPolicy)": {
+					{ExitCode: 1, Stderr: "slow network"},
+				},
+			},
+			wantResult: false,
+		},
+	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.envVars {
+				t.Setenv(k, v)
+			}
+			mockExecutor := NewMockExecutor(tt.mockResponses)
+			orc := &GKEOrchestrator{executor: mockExecutor}
+
+			got, err := orc.verifySuperSlicingActive(tt.opts)
+
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if got != tt.wantResult {
+				t.Errorf("Expected %t, got %t", tt.wantResult, got)
+			}
+		})
+	}
+}

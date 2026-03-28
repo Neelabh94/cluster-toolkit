@@ -412,3 +412,77 @@ func TestWaitForJobCompletion(t *testing.T) {
 		})
 	}
 }
+
+func TestFetchMachineCapacity(t *testing.T) {
+	tests := []struct {
+		name          string
+		machineType   string
+		zone          string
+		mockResponses map[string][]shell.CommandResult
+		wantCount     int
+		wantErr       bool
+	}{
+		{
+			name:        "Successful lookup",
+			machineType: "g2-standard-48",
+			zone:        "us-central1-a",
+			mockResponses: map[string][]shell.CommandResult{
+				"gcloud compute machine-types describe g2-standard-48 --zone=us-central1-a --format=json": {
+					{ExitCode: 0, Stdout: `{"accelerators": [{"guestAcceleratorCount": 4, "guestAcceleratorType": "nvidia-l4"}]}`},
+				},
+			},
+			wantCount: 4,
+			wantErr:   false,
+		},
+		{
+			name:        "Lookup failure with retries succeeding",
+			machineType: "g2-standard-48",
+			zone:        "us-central1-a",
+			mockResponses: map[string][]shell.CommandResult{
+				"gcloud compute machine-types describe g2-standard-48 --zone=us-central1-a --format=json": {
+					{ExitCode: 1, Stderr: "slow network"},
+					{ExitCode: 0, Stdout: `{"accelerators": [{"guestAcceleratorCount": 4, "guestAcceleratorType": "nvidia-l4"}]}`},
+				},
+			},
+			wantCount: 4,
+			wantErr:   false,
+		},
+		{
+			name:        "Total failure after retries",
+			machineType: "g2-standard-48",
+			zone:        "us-central1-a",
+			mockResponses: map[string][]shell.CommandResult{
+				"gcloud compute machine-types describe g2-standard-48 --zone=us-central1-a --format=json": {
+					{ExitCode: 1, Stderr: "slow network"},
+					{ExitCode: 1, Stderr: "slow network"},
+					{ExitCode: 1, Stderr: "slow network"},
+				},
+			},
+			wantCount: 0,
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockExecutor := NewMockExecutor(tt.mockResponses)
+			orc := &GKEOrchestrator{executor: mockExecutor}
+
+			count, err := orc.FetchMachineCapacity(tt.machineType, tt.zone)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Expected error, but got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if count != tt.wantCount {
+					t.Errorf("Expected count %d, got %d", tt.wantCount, count)
+				}
+			}
+		})
+	}
+}
+

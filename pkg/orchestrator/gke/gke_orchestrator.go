@@ -27,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -139,6 +140,7 @@ type ManifestOptions struct {
 	ImagePullSecrets        string
 	ServiceAccountName      string
 	TopologyAnnotation      string
+	Topology                string
 	SchedulerName           string
 	Tolerations             string
 	AwaitJobCompletion      bool
@@ -585,13 +587,8 @@ func (g *GKEOrchestrator) parseAcceleratorOutput(output string) (string, error) 
 }
 
 func (g *GKEOrchestrator) resolveTopology(requested string, accelType string) (string, error) {
-	if requested != "" {
-		logging.Info("Using provided Topology: %s", requested)
-		return requested, nil
-	}
-
-	if !strings.Contains(accelType, "tpu") {
-		return "", nil
+	if !strings.Contains(strings.ToLower(accelType), "tpu") {
+		return "", nil // Rejects GPU topologies implicitly
 	}
 
 	logging.Info("Auto-discovering Topology for %s...", accelType)
@@ -620,7 +617,23 @@ func (g *GKEOrchestrator) resolveTopology(requested string, accelType string) (s
 	}
 
 	if len(topologies) == 0 {
+		if requested != "" {
+			logging.Info("Warning: No active topologies discovered from Kueue or Nodes. Fast-tracking provided topology: %s", requested)
+			return requested, nil
+		}
 		return "", nil
+	}
+
+	if requested != "" {
+		if !topologies[requested] {
+			var valid []string
+			for t := range topologies {
+				valid = append(valid, t)
+			}
+			return "", fmt.Errorf("requested topology %s is not valid for cluster. Valid topologies discovered: %v", requested, valid)
+		}
+		logging.Info("Validated provided Topology: %s", requested)
+		return requested, nil
 	}
 
 	uniqueTops := make([]string, 0, len(topologies))
@@ -1066,7 +1079,29 @@ func (g *GKEOrchestrator) GenerateGKENodeSelectorLabel(acceleratorType string) s
 func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, error) {
 	g.setManifestDefaults(&opts)
 
-	cpuLimit, memoryLimit, gpuLimit, tpuLimit := g.calculateResourceLimits(opts.AcceleratorType)
+	// Calculate VmsPerSlice dynamically if not provided and topology is present.
+	if opts.VmsPerSlice <= 1 && opts.Topology != "" {
+		machineTypeMap := map[string]string{
+			"nvidia-l4":     "g2-standard-4",
+			"tpu-v6e-slice": "ct6e-standard-4t",
+		}
+		mapped := g.GenerateGKENodeSelectorLabel(opts.AcceleratorType)
+		if machineName, exists := machineTypeMap[mapped]; exists {
+			if chipsPerVM, err := g.FetchMachineCapacity(machineName, opts.ClusterLocation); err == nil && chipsPerVM > 0 {
+				dims := strings.Split(opts.Topology, "x")
+				totalChips := 1
+				for _, dim := range dims {
+					if val, err := strconv.Atoi(dim); err == nil {
+						totalChips *= val
+					}
+				}
+				opts.VmsPerSlice = totalChips / chipsPerVM
+				logging.Info("Dynamically determined vms_per_slice for %s: %d", opts.Topology, opts.VmsPerSlice)
+			}
+		}
+	}
+
+	cpuLimit, memoryLimit, gpuLimit, tpuLimit := g.calculateResourceLimits(opts)
 
 	resourcesString := fmt.Sprintf("                resources:\n                  limits:\n                    cpu: %s\n                    memory: %s", cpuLimit, memoryLimit)
 	if gpuLimit != "" {
@@ -1130,13 +1165,73 @@ var defaultResourceLimits = map[string][4]string{
 	"":                      {"0.5", "512Mi", "", ""},
 }
 
+
 func isTPUFallback(mapped string) bool {
 	lower := strings.ToLower(mapped)
 	return strings.Contains(lower, "tpu") || (len(lower) >= 2 && lower[0] == 'v' && lower[1] >= '0' && lower[1] <= '9')
 }
 
-func (g *GKEOrchestrator) calculateResourceLimits(acceleratorType string) (cpu, mem, gpu, tpu string) {
-	mapped := g.GenerateGKENodeSelectorLabel(acceleratorType)
+type MachineTypeCap struct {
+	Accelerators []struct {
+		Count int    `json:"guestAcceleratorCount"`
+		Type  string `json:"guestAcceleratorType"`
+	} `json:"accelerators"`
+}
+
+func (g *GKEOrchestrator) FetchMachineCapacity(machineType, zone string) (int, error) {
+	if zone == "" {
+		return 0, fmt.Errorf("zone is required for machine capacity lookup")
+	}
+
+	maxRetries := 3
+	var result shell.CommandResult
+
+	for i := 0; i < maxRetries; i++ {
+		result = g.executor.ExecuteCommand("gcloud", "compute", "machine-types", "describe", machineType, "--zone="+zone, "--format=json")
+		if result.ExitCode == 0 {
+			break
+		}
+		logging.Info("gcloud compute machine-types describe failed (attempt %d/%d): %s. Retrying...", i+1, maxRetries, result.Stderr)
+		time.Sleep(time.Duration(1<<i) * time.Second) // Exponential backoff
+	}
+
+	if result.ExitCode != 0 {
+		return 0, fmt.Errorf("gcloud compute machine-types describe failed after %d retries: %s", maxRetries, result.Stderr)
+	}
+
+	var cap MachineTypeCap
+	if err := json.Unmarshal([]byte(result.Stdout), &cap); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal machine capacity JSON: %w", err)
+	}
+
+	if len(cap.Accelerators) == 0 {
+		return 0, fmt.Errorf("no accelerators found for machine type %s", machineType)
+	}
+
+	return cap.Accelerators[0].Count, nil
+}
+
+func (g *GKEOrchestrator) calculateResourceLimits(opts ManifestOptions) (cpu, mem, gpu, tpu string) {
+	mapped := g.GenerateGKENodeSelectorLabel(opts.AcceleratorType)
+
+	// Attempt real-time dynamic query if zone is available.
+	if opts.ClusterLocation != "" && mapped != "" {
+		machineTypeMap := map[string]string{
+			"nvidia-l4":     "g2-standard-4",
+			"tpu-v6e-slice": "ct6e-standard-4t",
+		}
+
+		if machineName, exists := machineTypeMap[mapped]; exists {
+			if count, err := g.FetchMachineCapacity(machineName, opts.ClusterLocation); err == nil && count > 0 {
+				logging.Info("Dynamically determined capacity for %s: %d chips", machineName, count)
+				if strings.Contains(strings.ToLower(mapped), "nvidia") {
+					return fmt.Sprintf("%d", count*12), fmt.Sprintf("%dGi", count*48), fmt.Sprintf("%d", count), ""
+				}
+			} else {
+				logging.Info("Dynamic capacity lookup failed or not implemented for machine type fallback: %v", err)
+			}
+		}
+	}
 
 	if limits, exists := defaultResourceLimits[mapped]; exists {
 		return limits[0], limits[1], limits[2], limits[3]
@@ -1150,6 +1245,7 @@ func (g *GKEOrchestrator) calculateResourceLimits(acceleratorType string) (cpu, 
 	}
 	return "0.5", "512Mi", "", ""
 }
+
 
 func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, updatedCommand string) interface{} {
 	return struct {
@@ -1283,6 +1379,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		Tolerations:             tolerationsStr,
 		AwaitJobCompletion:      job.AwaitJobCompletion,
 		PriorityClassName:       job.PriorityClassName,
+		Topology:                schedOpts.Topology,
 	}
 
 	g.addVolumeOptions(&opts, job.Volumes)
@@ -1600,6 +1697,9 @@ func (g *GKEOrchestrator) waitForJobCompletion(workloadName, clusterName, cluste
 func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptions, job orchestrator.JobDefinition) (string, error) {
 	nodeSelector := scheduling.GetNodeSelector(schedOpts)
 	accelLabel := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
+
+	isGPU := strings.Contains(strings.ToLower(accelLabel), "nvidia")
+
 	if accelLabel != "" {
 		if nodeSelector == nil {
 			nodeSelector = make(map[string]string)
@@ -1612,6 +1712,9 @@ func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptio
 	}
 
 	if schedOpts.Topology != "" {
+		if isGPU {
+			return "", fmt.Errorf("topology is not allowed for GPU jobs")
+		}
 		if nodeSelector == nil {
 			nodeSelector = make(map[string]string)
 		}
@@ -1627,6 +1730,7 @@ func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptio
 	}
 	return "", nil
 }
+
 
 func (g *GKEOrchestrator) buildAffinity(schedOpts scheduling.SchedulingOptions) (string, error) {
 	if affinity := scheduling.GetAffinity(schedOpts); affinity != nil {

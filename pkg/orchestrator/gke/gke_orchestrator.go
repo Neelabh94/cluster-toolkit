@@ -148,6 +148,7 @@ type ManifestOptions struct {
 	VolumesYAML             string
 	VolumeMountsYAML        string
 	GCSFuseEnabled          bool
+	IsSuperSlicing          bool // True if the cluster supports and is configured for Super-slicing.
 	Pathways                orchestrator.PathwaysJobDefinition
 }
 
@@ -1211,6 +1212,46 @@ func (g *GKEOrchestrator) FetchMachineCapacity(machineType, zone string) (int, e
 	return cap.Accelerators[0].Count, nil
 }
 
+func (g *GKEOrchestrator) verifySuperSlicingActive(opts ManifestOptions) (bool, error) {
+	// 1. TPU Focus: Return false immediately if not using TPUs.
+	if opts.AcceleratorType == "" || !strings.Contains(strings.ToLower(opts.AcceleratorType), "tpu") {
+		return false, nil
+	}
+
+	// 2. Machine Type/Profile Guard: Describe node pool to see if it uses PROVISION_ONLY!
+	// We check for placeholder variables for node pool name. In real usage, this should be resolved from the cluster.
+	poolName := os.Getenv("GKE_NODE_POOL_NAME")
+	if poolName == "" {
+		logging.Warn("GKE_NODE_POOL_NAME is not set. Assuming Super-slicing is not active for this node pool.")
+		return false, nil
+	}
+
+	result := g.executor.ExecuteCommand("gcloud", "container", "node-pools", "describe", poolName, "--cluster="+opts.ClusterName, "--zone="+opts.ClusterLocation, "--format=json(placementPolicy)")
+	if result.ExitCode != 0 {
+		logging.Warn("gcloud container node-pools describe failed: %s. Proceeding assuming no Super-slicing.", result.Stderr)
+		return false, nil
+	}
+
+	var policy map[string]interface{}
+	if err := json.Unmarshal([]byte(result.Stdout), &policy); err == nil {
+		if placement, ok := policy["placementPolicy"].(map[string]interface{}); ok {
+			if mode, ok := placement["acceleratorTopologyMode"].(string); ok && mode == "PROVISION_ONLY" {
+				logging.Info("Super-slicing PROVISION_ONLY mode detected for node pool %s.", poolName)
+				return true, nil
+			}
+		}
+	}
+
+	// 3. Kueue CRD Checks: Check for topologies.kueue.x-k8s.io and AdmissionChecks (simulated via shell commands)
+	crdResult := g.executor.ExecuteCommand("kubectl", "get", "crd", "topologies.kueue.x-k8s.io")
+	if crdResult.ExitCode != 0 {
+		logging.Warn("Topology CRD not found. Kueue Super-slicing not active.")
+		return false, nil
+	}
+
+	return true, nil
+}
+
 func (g *GKEOrchestrator) calculateResourceLimits(opts ManifestOptions) (cpu, mem, gpu, tpu string) {
 	mapped := g.GenerateGKENodeSelectorLabel(opts.AcceleratorType)
 
@@ -1323,7 +1364,14 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 	}
 	schedOpts.Topology = topology
 
-	nodeSelectorStr, err := g.buildNodeSelector(schedOpts, job)
+	// Call verifySuperSlicingActive to determine if super-slicing is active!
+	isSuperSlicing, _ := g.verifySuperSlicingActive(ManifestOptions{
+		ClusterName:     job.ClusterName,
+		ClusterLocation: job.ClusterLocation,
+		AcceleratorType: job.AcceleratorType,
+	})
+
+	nodeSelectorStr, err := g.buildNodeSelector(schedOpts, job, isSuperSlicing)
 	if err != nil {
 		return ManifestOptions{}, err
 	}
@@ -1694,7 +1742,7 @@ func (g *GKEOrchestrator) waitForJobCompletion(workloadName, clusterName, cluste
 	return nil
 }
 
-func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptions, job orchestrator.JobDefinition) (string, error) {
+func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptions, job orchestrator.JobDefinition, isSuperSlicing bool) (string, error) {
 	nodeSelector := scheduling.GetNodeSelector(schedOpts)
 	accelLabel := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
 
@@ -1718,7 +1766,9 @@ func (g *GKEOrchestrator) buildNodeSelector(schedOpts scheduling.SchedulingOptio
 		if nodeSelector == nil {
 			nodeSelector = make(map[string]string)
 		}
-		nodeSelector["cloud.google.com/gke-tpu-topology"] = schedOpts.Topology
+		if !isSuperSlicing {
+			nodeSelector["cloud.google.com/gke-tpu-topology"] = schedOpts.Topology
+		}
 	}
 
 	if len(nodeSelector) > 0 {

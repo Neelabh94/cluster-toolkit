@@ -109,9 +109,29 @@ type LogsOptions struct {
 	ClusterLocation string
 }
 
-type Orchestrator interface {
+type JobOrchestrator interface {
 	SubmitJob(job JobDefinition) error
 	ListJobs(opts ListOptions) ([]JobStatus, error)
 	CancelJob(name string, opts CancelOptions) error
 	GetJobLogs(name string, opts LogsOptions) (string, error)
+}
+
+type ClusterStatus struct {
+	Name     string
+	Location string
+	Status   string
+}
+
+type VolumeStatus struct {
+	Name      string
+	Type      string
+	MountPath string
+	Cluster   string
+}
+
+type ClusterOrchestrator interface {
+	ListEnvironments(opts ListOptions) ([]ClusterStatus, error)
+	GetClusterInfo(name string, opts ListOptions) (string, error)
+	DescribeEnvironment(name string, opts ListOptions) (string, error)
+	ListVolumes(opts ListOptions) ([]VolumeStatus, error)
 }

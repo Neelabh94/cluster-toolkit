@@ -182,6 +182,12 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 
 func TestGenerateGKEManifest_Volumes(t *testing.T) {
 	orc, _ := NewGKEOrchestrator()
+	mockExec := NewMockExecutor(map[string][]shell.CommandResult{
+		"gcloud compute machine-types describe n2-standard-4": {
+			{ExitCode: 0, Stdout: `{"guestCpus": 4}`},
+		},
+	})
+	orc.SetExecutor(mockExec)
 	job := orchestrator.JobDefinition{
 		WorkloadName:    "volume-test",
 		CommandToRun:    "echo hello",

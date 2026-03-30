@@ -61,6 +61,10 @@ var (
 	pathways  orchestrator.PathwaysJobDefinition
 )
 
+var gkeOrchestratorFactory = func() (*gke.GKEOrchestrator, error) {
+	return gke.NewGKEOrchestrator()
+}
+
 var SubmitCmd = &cobra.Command{
 	Use:   "submit",
 	Short: "Submits a container image workload on a Gke cluster using JobSet.",
@@ -234,7 +238,7 @@ func parseVolumeFlag(vStrs []string) []orchestrator.VolumeDefinition {
 }
 
 func submitGKEJob(jobDef orchestrator.JobDefinition) error {
-	gkeOrchestrator, err := gke.NewGKEOrchestrator()
+	gkeOrchestrator, err := gkeOrchestratorFactory()
 	if err != nil {
 		return fmt.Errorf("failed to create GKE orchestrator: %v", err)
 	}

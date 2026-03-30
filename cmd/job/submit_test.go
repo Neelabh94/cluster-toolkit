@@ -17,6 +17,8 @@ package job
 import (
 	"bytes"
 	"hpc-toolkit/pkg/orchestrator"
+	"hpc-toolkit/pkg/orchestrator/gke"
+	"hpc-toolkit/pkg/shell"
 	"os"
 	"strings"
 	"testing"
@@ -44,6 +46,18 @@ func TestSubmitCmd_PathwaysDryRun(t *testing.T) {
 	defer os.Remove(tmpfile.Name()) // clean up
 
 	os.Setenv("GCLUSTER_SKIP_PREREQ_CHECKS", "true")
+
+	oldFactory := gkeOrchestratorFactory
+	defer func() { gkeOrchestratorFactory = oldFactory }()
+
+	gkeOrchestratorFactory = func() (*gke.GKEOrchestrator, error) {
+		g, err := gke.NewGKEOrchestrator()
+		if err != nil {
+			return nil, err
+		}
+		g.SetExecutor(&mockExecutorForTest{})
+		return g, nil
+	}
 
 	// Reset flags before each test
 	resetSubmitCmdFlags()
@@ -122,4 +136,16 @@ func resetSubmitCmdFlags() {
 	priorityClassName = "medium"
 	isPathwaysJob = false
 	pathways = orchestrator.PathwaysJobDefinition{}
+}
+
+type mockExecutorForTest struct{}
+
+func (m *mockExecutorForTest) ExecuteCommand(name string, args ...string) shell.CommandResult {
+	if name == "gcloud" && len(args) > 3 && args[0] == "compute" && args[1] == "machine-types" && args[2] == "describe" {
+		return shell.CommandResult{
+			ExitCode: 0,
+			Stdout:   `{"guestCpus": 4}`,
+		}
+	}
+	return shell.CommandResult{ExitCode: 1, Stderr: "unhandled mock command"}
 }

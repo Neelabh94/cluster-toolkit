@@ -24,6 +24,7 @@ import (
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/scheduling"
 	"hpc-toolkit/pkg/shell"
+	"hpc-toolkit/pkg/telemetry"
 	"io"
 	"net/http"
 	"os"
@@ -178,11 +179,28 @@ func NewGKEOrchestrator() (*GKEOrchestrator, error) {
 	}, nil
 }
 
+func (g *GKEOrchestrator) SetExecutor(e Executor) {
+	g.executor = e
+}
+
 func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 	logging.Info("Starting gcluster job submit workflow...")
 
+	startTime := time.Now()
+	var success bool
+	defer func() {
+		latencySecs := time.Since(startTime).Seconds()
+		profile := map[string]string{
+			"accelerator_type": job.AcceleratorType,
+			"nodes":            fmt.Sprintf("%d", job.NumSlices),
+		}
+
+		telemetry.RecordLocalMetrics(job.WorkloadName, latencySecs, success, profile)
+	}()
+
 	var err error
 	job, err = g.initializeJobSubmission(job)
+
 	if err != nil {
 		return err
 	}
@@ -231,6 +249,7 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 	}
 
 	logging.Info("gcluster job submit workflow completed.")
+	success = true
 	return nil
 }
 
@@ -687,7 +706,6 @@ func (g *GKEOrchestrator) parseTopologies(output string) map[string]bool {
 	return topologies
 }
 
-
 func (g *GKEOrchestrator) queryDiscoveredTopologies() (string, error) {
 	res := g.executor.ExecuteCommand("kubectl", "get", "resourceflavors.kueue.x-k8s.io", "-o", "jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end}")
 	output := strings.TrimSpace(res.Stdout)
@@ -751,7 +769,6 @@ func (g *GKEOrchestrator) PrepareManifestOptions(job orchestrator.JobDefinition,
 	opts, profile, err := g.prepareManifestOptions(job, fullImageName)
 	return opts, profile, err
 }
-
 
 func (g *GKEOrchestrator) GeneratePathwaysManifest(job orchestrator.JobDefinition, fullImageName string) (string, error) {
 	return g.generatePathwaysManifest(job, fullImageName)
@@ -1254,77 +1271,8 @@ type MachineTypeCap struct {
 	GuestCpus int `json:"guestCpus"` // Parse vCPUs for CPU-only machines
 }
 
-var staticMachineCapacity = map[string]int{
-	// GPUs - RTX-Pro 6000 (g4 series)
-	"g4-standard-48":  1,
-	"g4-standard-96":  2,
-	"g4-standard-192": 4,
-	"g4-standard-384": 8,
-
-	// GPUs - Tesla A100 (a2 series)
-	"a2-highgpu-1g":  1,
-	"a2-highgpu-2g":  2,
-	"a2-highgpu-4g":  4,
-	"a2-highgpu-8g":  8,
-	"a2-megagpu-16g": 16,
-
-	// GPUs - A100 80GB
-	"a2-ultragpu-1g": 1,
-	"a2-ultragpu-2g": 2,
-	"a2-ultragpu-4g": 4,
-	"a2-ultragpu-8g": 8,
-
-	// GPUs - H100 80GB
-	"a3-highgpu-1g": 1,
-	"a3-highgpu-2g": 2,
-	"a3-highgpu-4g": 4,
-	"a3-highgpu-8g": 8,
-
-	// GPUs - H100 Mega & H200
-	"a3-megagpu-8g":  8,
-	"a3-ultragpu-8g": 8,
-
-	// GPUs - B200 and GB200
-	"a4-highgpu-8g-lowmem":  8,
-	"a4-highgpu-8g":         8,
-	"a4x-highgpu-4g":        4,
-	"a4x-highgpu-4g-nolssd": 4,
-
-	// GPUs - L4 (g2 series)
-	"g2-standard-4":  1,
-	"g2-standard-8":  1,
-	"g2-standard-12": 1,
-	"g2-standard-24": 2,
-	"g2-standard-48": 4,
-	"g2-standard-96": 8,
-
-	// TPUs
-	"ct4p-hightpu-4t":  4,
-	"ct5p-hightpu-1t":  1,
-	"ct5p-hightpu-2t":  2,
-	"ct5p-hightpu-4t":  4,
-	"ct6e-standard-1t": 1,
-	"ct6e-standard-4t": 4,
-	"ct6e-standard-8t": 8,
-}
-
 var acceleratorShorthandMap = map[string]string{
-	"nvidia-l4":             "g2-standard-12",
-	"nvidia-tesla-a100":     "a2-highgpu-1g",
-	"nvidia-a100-80gb":      "a3-highgpu-8g",
-	"nvidia-h100-80gb":      "a3-highgpu-8g",
-	"nvidia-h100-mega-80gb": "a3-megagpu-8g",
-	"nvidia-h200-141gb":     "a3-ultragpu-8g",
-	"nvidia-b200":           "a4-highgpu-8g",
-	"nvidia-gb200":          "a4x-highgpu-4g",
-	"tpu-v7":                "tpu7-standard-1t",
-	"tpu-v7x":               "tpu7x-standard-4t",
-	"tpu-v6e-slice":         "ct6e-standard-4t",
-	"tpu-v5p-slice":         "ct5p-hightpu-4t",
-	"tpu-v5-lite-podslice":  "ct5lp-hightpu-4t",
-	"tpu-v4-podslice":       "ct4p-hightpu-4t",
-
-	// xpk compatibility mappings (GPUs)
+	// GPU mappings
 	"l4-1":             "g2-standard-12",
 	"l4-2":             "g2-standard-24",
 	"l4-4":             "g2-standard-48",
@@ -1351,22 +1299,22 @@ var acceleratorShorthandMap = map[string]string{
 	"b200-8":           "a4-highgpu-8g",
 	"gb200-4":          "a4x-highgpu-4g",
 
-	// xpk compatibility mappings (TPUs - Single VM configurations)
-	"v4-8":  "ct4p-hightpu-4t",
-	"v5p-2": "ct5p-hightpu-1t",
-	"v5p-4": "ct5p-hightpu-2t",
-	"v5p-8": "ct5p-hightpu-4t",
-	"v6e-1": "ct6e-standard-1t",
-	"v6e-4": "ct6e-standard-4t",
-	"v6e-8": "ct6e-standard-8t",
+	// TPUs mappings
+	"v4-8":    "ct4p-hightpu-4t",
+	"v5p-1":   "ct5p-hightpu-1t",
+	"v5p-2":   "ct5p-hightpu-2t",
+	"v5p-4":   "ct5p-hightpu-4t",
+	"v5e-1":   "ct5lp-hightpu-1t",
+	"v5e-4":   "ct5lp-hightpu-4t",
+	"v5e-8":   "ct5lp-hightpu-8t",
+	"v6e-1":   "ct6e-standard-1t",
+	"v6e-4":   "ct6e-standard-4t",
+	"v6e-8":   "ct6e-standard-8t",
+	"tpu-v7":  "tpu7-standard-1t",
+	"tpu-v7x": "tpu7x-standard-4t",
 }
 
 func (g *GKEOrchestrator) FetchMachineCapacity(machineType, zone string) (int, error) {
-	if cap, exists := staticMachineCapacity[machineType]; exists {
-		logging.Info("Using hardcoded capacity for machine type %s: %d", machineType, cap)
-		return cap, nil
-	}
-
 	if zone == "" {
 		return 0, fmt.Errorf("zone is required for machine capacity lookup")
 	}
@@ -1504,10 +1452,10 @@ func (g *GKEOrchestrator) calculateGCPMachineResourceLimits(opts ManifestOptions
 		if strings.Contains(strings.ToLower(mapped), "tpu") {
 			return "", "", "", fmt.Sprintf("%d", count), nil
 		}
+		return "", "", "", "", fmt.Errorf("machine type %s resolved to %d capacity but could not be classified as GPU or TPU (mapped label: %s)", machineName, count, mapped)
 	}
-	return "", "", "", "", nil
+	return "", "", "", "", fmt.Errorf("failed to determine capacity for machine type %s", machineName)
 }
-
 
 func (g *GKEOrchestrator) calculateCPUMachineResourceLimits(opts ManifestOptions, profile JobProfile) (string, error) {
 	count := profile.CapacityCount
@@ -1519,7 +1467,6 @@ func (g *GKEOrchestrator) calculateCPUMachineResourceLimits(opts ManifestOptions
 	}
 	return fmt.Sprintf("%d", offsetVCPUs), nil
 }
-
 
 func (g *GKEOrchestrator) resolveMachineName(acceleratorType string) string {
 	if mappedName, exists := acceleratorShorthandMap[acceleratorType]; exists {

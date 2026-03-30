@@ -120,6 +120,11 @@ spec:
 
 `
 
+type JobProfile struct {
+	IsCPUMachine  bool
+	CapacityCount int
+}
+
 type ManifestOptions struct {
 	WorkloadName            string
 	FullImageName           string
@@ -206,12 +211,14 @@ func (g *GKEOrchestrator) SubmitJob(job orchestrator.JobDefinition) error {
 		return g.applyManifest(manifestContent, job.OutputManifest, job.WorkloadName)
 	}
 
-	manifestOpts, err := g.prepareManifestOptions(job, fullImageName)
+	manifestOpts, profile, err := g.prepareManifestOptions(job, fullImageName)
+
 	if err != nil {
 		return err
 	}
 
-	err = g.generateAndApplyManifest(manifestOpts, job.OutputManifest)
+	err = g.generateAndApplyManifest(manifestOpts, profile, job.OutputManifest)
+
 	if err != nil {
 		return err
 	}
@@ -248,10 +255,12 @@ func (g *GKEOrchestrator) generatePathwaysManifest(job orchestrator.JobDefinitio
 		return "", fmt.Errorf("failed to parse pathways jobset template: %w", err)
 	}
 
-	opts, err := g.prepareManifestOptions(job, fullImageName)
+	opts, _, err := g.prepareManifestOptions(job, fullImageName)
+
 	if err != nil {
 		return "", err
 	}
+
 	opts.Pathways = job.Pathways
 
 	var buf bytes.Buffer
@@ -593,21 +602,12 @@ func (g *GKEOrchestrator) resolveTopology(requested string, accelType string, cl
 		return "", nil // Rejects GPU topologies implicitly
 	}
 
-	if active, _ := g.verifySuperSlicingActive(ManifestOptions{
-		ClusterName:     clusterName,
-		ClusterLocation: clusterLocation,
-		AcceleratorType: accelType,
-	}); active {
-		logging.Info("Super-slicing detected. Skipping strict physical state queries for topology.")
-		if requested != "" {
-			// Mathematical validation format check
-			if len(strings.Split(requested, "x")) != 3 {
-				return "", fmt.Errorf("invalid topology format %s. Must be AxBxC", requested)
-			}
-			logging.Info("Validated provided Topology (Optimistic/Super-Slicing): %s", requested)
-			return requested, nil
-		}
-		return "", nil
+	top, handled, err := g.resolveSuperSlicingTopology(requested, clusterName, clusterLocation, accelType)
+	if err != nil {
+		return "", err
+	}
+	if handled {
+		return top, nil
 	}
 
 	logging.Info("Auto-discovering Topology for %s...", accelType)
@@ -621,13 +621,7 @@ func (g *GKEOrchestrator) resolveTopology(requested string, accelType string, cl
 		return "", nil
 	}
 
-	topologies := make(map[string]bool)
-	for _, top := range strings.Split(output, "\n") {
-		top = strings.TrimSpace(top)
-		if top != "" {
-			topologies[top] = true
-		}
-	}
+	topologies := g.parseTopologies(output)
 
 	if len(topologies) == 0 {
 		if requested != "" {
@@ -662,6 +656,37 @@ func (g *GKEOrchestrator) resolveTopology(requested string, accelType string, cl
 	logging.Info("Warning: Multiple Topologies found (%v). Defaulting to the first one: %s", uniqueTops, uniqueTops[0])
 	return uniqueTops[0], nil
 }
+
+func (g *GKEOrchestrator) resolveSuperSlicingTopology(requested string, clusterName string, clusterLocation string, accelType string) (string, bool, error) {
+	if active, _ := g.verifySuperSlicingActive(ManifestOptions{
+		ClusterName:     clusterName,
+		ClusterLocation: clusterLocation,
+		AcceleratorType: accelType,
+	}); active {
+		logging.Info("Super-slicing detected. Skipping strict physical state queries for topology.")
+		if requested != "" {
+			if len(strings.Split(requested, "x")) != 3 {
+				return "", true, fmt.Errorf("invalid topology format %s. Must be AxBxC", requested)
+			}
+			logging.Info("Validated provided Topology (Super-Slicing): %s", requested)
+			return requested, true, nil
+		}
+		return "", true, nil
+	}
+	return "", false, nil
+}
+
+func (g *GKEOrchestrator) parseTopologies(output string) map[string]bool {
+	topologies := make(map[string]bool)
+	for _, top := range strings.Split(output, "\n") {
+		top = strings.TrimSpace(top)
+		if top != "" {
+			topologies[top] = true
+		}
+	}
+	return topologies
+}
+
 
 func (g *GKEOrchestrator) queryDiscoveredTopologies() (string, error) {
 	res := g.executor.ExecuteCommand("kubectl", "get", "resourceflavors.kueue.x-k8s.io", "-o", "jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end}")
@@ -722,9 +747,11 @@ func (g *GKEOrchestrator) BuildContainerImage(project, baseImage, buildContext, 
 	return g.buildContainerImage(project, baseImage, buildContext, platformStr, imageName)
 }
 
-func (g *GKEOrchestrator) PrepareManifestOptions(job orchestrator.JobDefinition, fullImageName string) (ManifestOptions, error) {
-	return g.prepareManifestOptions(job, fullImageName)
+func (g *GKEOrchestrator) PrepareManifestOptions(job orchestrator.JobDefinition, fullImageName string) (ManifestOptions, JobProfile, error) {
+	opts, profile, err := g.prepareManifestOptions(job, fullImageName)
+	return opts, profile, err
 }
+
 
 func (g *GKEOrchestrator) GeneratePathwaysManifest(job orchestrator.JobDefinition, fullImageName string) (string, error) {
 	return g.generatePathwaysManifest(job, fullImageName)
@@ -734,9 +761,9 @@ func (g *GKEOrchestrator) ApplyManifest(manifestContent, outputManifestPath, wor
 	return g.applyManifest(manifestContent, outputManifestPath, workloadName)
 }
 
-func (g *GKEOrchestrator) generateAndApplyManifest(opts ManifestOptions, outputManifestPath string) error {
+func (g *GKEOrchestrator) generateAndApplyManifest(opts ManifestOptions, profile JobProfile, outputManifestPath string) error {
 	logging.Info("Generating GKE manifest...")
-	gkeManifestContent, err := g.GenerateGKEManifest(opts)
+	gkeManifestContent, err := g.GenerateGKEManifest(opts, profile)
 	if err != nil {
 		return fmt.Errorf("failed to generate GKE manifest: %w", err)
 	}
@@ -1087,8 +1114,17 @@ func (g *GKEOrchestrator) removeDescriptionFields(data map[interface{}]interface
 }
 
 func (g *GKEOrchestrator) GenerateGKENodeSelectorLabel(acceleratorType string) string {
-	if strings.HasPrefix(acceleratorType, "v6e-") {
+	if strings.HasPrefix(acceleratorType, "v6e-") || strings.HasPrefix(acceleratorType, "v6e-slice-") {
 		return "tpu-v6e-slice"
+	}
+	if strings.HasPrefix(acceleratorType, "v5p-") || strings.HasPrefix(acceleratorType, "v5p-slice-") {
+		return "tpu-v5p-slice"
+	}
+	if strings.HasPrefix(acceleratorType, "l4-") {
+		return "nvidia-l4"
+	}
+	if strings.HasPrefix(acceleratorType, "rtx-6000-") || strings.HasPrefix(acceleratorType, "rtx-pro-6000-") {
+		return "nvidia-rtx-pro-6000"
 	}
 	if strings.Contains(acceleratorType, "tpu7x") {
 		return "tpu7x"
@@ -1103,13 +1139,13 @@ func (g *GKEOrchestrator) GenerateGKENodeSelectorLabel(acceleratorType string) s
 	}
 }
 
-func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions) (string, error) {
+func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions, profile JobProfile) (string, error) {
 	g.setManifestDefaults(&opts)
 
 	// Calculate VmsPerSlice dynamically if not provided and topology is present.
 	g.dynamicallyDetermineVmsPerSlice(&opts)
 
-	cpuLimit, memoryLimit, gpuLimit, tpuLimit, err := g.calculateResourceLimits(opts)
+	cpuLimit, memoryLimit, gpuLimit, tpuLimit, err := g.calculateResourceLimits(opts, profile)
 	if err != nil {
 		return "", fmt.Errorf("failed to calculate resource limits: %w", err)
 	}
@@ -1218,7 +1254,119 @@ type MachineTypeCap struct {
 	GuestCpus int `json:"guestCpus"` // Parse vCPUs for CPU-only machines
 }
 
+var staticMachineCapacity = map[string]int{
+	// GPUs - RTX-Pro 6000 (g4 series)
+	"g4-standard-48":  1,
+	"g4-standard-96":  2,
+	"g4-standard-192": 4,
+	"g4-standard-384": 8,
+
+	// GPUs - Tesla A100 (a2 series)
+	"a2-highgpu-1g":  1,
+	"a2-highgpu-2g":  2,
+	"a2-highgpu-4g":  4,
+	"a2-highgpu-8g":  8,
+	"a2-megagpu-16g": 16,
+
+	// GPUs - A100 80GB
+	"a2-ultragpu-1g": 1,
+	"a2-ultragpu-2g": 2,
+	"a2-ultragpu-4g": 4,
+	"a2-ultragpu-8g": 8,
+
+	// GPUs - H100 80GB
+	"a3-highgpu-1g": 1,
+	"a3-highgpu-2g": 2,
+	"a3-highgpu-4g": 4,
+	"a3-highgpu-8g": 8,
+
+	// GPUs - H100 Mega & H200
+	"a3-megagpu-8g":  8,
+	"a3-ultragpu-8g": 8,
+
+	// GPUs - B200 and GB200
+	"a4-highgpu-8g-lowmem":  8,
+	"a4-highgpu-8g":         8,
+	"a4x-highgpu-4g":        4,
+	"a4x-highgpu-4g-nolssd": 4,
+
+	// GPUs - L4 (g2 series)
+	"g2-standard-4":  1,
+	"g2-standard-8":  1,
+	"g2-standard-12": 1,
+	"g2-standard-24": 2,
+	"g2-standard-48": 4,
+	"g2-standard-96": 8,
+
+	// TPUs
+	"ct4p-hightpu-4t":  4,
+	"ct5p-hightpu-1t":  1,
+	"ct5p-hightpu-2t":  2,
+	"ct5p-hightpu-4t":  4,
+	"ct6e-standard-1t": 1,
+	"ct6e-standard-4t": 4,
+	"ct6e-standard-8t": 8,
+}
+
+var acceleratorShorthandMap = map[string]string{
+	"nvidia-l4":             "g2-standard-12",
+	"nvidia-tesla-a100":     "a2-highgpu-1g",
+	"nvidia-a100-80gb":      "a3-highgpu-8g",
+	"nvidia-h100-80gb":      "a3-highgpu-8g",
+	"nvidia-h100-mega-80gb": "a3-megagpu-8g",
+	"nvidia-h200-141gb":     "a3-ultragpu-8g",
+	"nvidia-b200":           "a4-highgpu-8g",
+	"nvidia-gb200":          "a4x-highgpu-4g",
+	"tpu-v7":                "tpu7-standard-1t",
+	"tpu-v7x":               "tpu7x-standard-4t",
+	"tpu-v6e-slice":         "ct6e-standard-4t",
+	"tpu-v5p-slice":         "ct5p-hightpu-4t",
+	"tpu-v5-lite-podslice":  "ct5lp-hightpu-4t",
+	"tpu-v4-podslice":       "ct4p-hightpu-4t",
+
+	// xpk compatibility mappings (GPUs)
+	"l4-1":             "g2-standard-12",
+	"l4-2":             "g2-standard-24",
+	"l4-4":             "g2-standard-48",
+	"l4-8":             "g2-standard-96",
+	"rtx-6000-1":       "g4-standard-48",
+	"rtx-6000-2":       "g4-standard-96",
+	"rtx-6000-4":       "g4-standard-192",
+	"rtx-6000-8":       "g4-standard-384",
+	"a100-40gb-1":      "a2-highgpu-1g",
+	"a100-40gb-2":      "a2-highgpu-2g",
+	"a100-40gb-4":      "a2-highgpu-4g",
+	"a100-40gb-8":      "a2-highgpu-8g",
+	"a2-megagpu-16g":   "a2-megagpu-16g",
+	"a100-80gb-1":      "a2-ultragpu-1g",
+	"a100-80gb-2":      "a2-ultragpu-2g",
+	"a100-80gb-4":      "a2-ultragpu-4g",
+	"a100-80gb-8":      "a2-ultragpu-8g",
+	"h100-80gb-1":      "a3-highgpu-1g",
+	"h100-80gb-2":      "a3-highgpu-2g",
+	"h100-80gb-4":      "a3-highgpu-4g",
+	"h100-80gb-8":      "a3-highgpu-8g",
+	"h100-mega-80gb-8": "a3-megagpu-8g",
+	"h200-141gb-8":     "a3-ultragpu-8g",
+	"b200-8":           "a4-highgpu-8g",
+	"gb200-4":          "a4x-highgpu-4g",
+
+	// xpk compatibility mappings (TPUs - Single VM configurations)
+	"v4-8":  "ct4p-hightpu-4t",
+	"v5p-2": "ct5p-hightpu-1t",
+	"v5p-4": "ct5p-hightpu-2t",
+	"v5p-8": "ct5p-hightpu-4t",
+	"v6e-1": "ct6e-standard-1t",
+	"v6e-4": "ct6e-standard-4t",
+	"v6e-8": "ct6e-standard-8t",
+}
+
 func (g *GKEOrchestrator) FetchMachineCapacity(machineType, zone string) (int, error) {
+	if cap, exists := staticMachineCapacity[machineType]; exists {
+		logging.Info("Using hardcoded capacity for machine type %s: %d", machineType, cap)
+		return cap, nil
+	}
+
 	if zone == "" {
 		return 0, fmt.Errorf("zone is required for machine capacity lookup")
 	}
@@ -1296,7 +1444,7 @@ func (g *GKEOrchestrator) verifySuperSlicingActive(opts ManifestOptions) (bool, 
 	return true, nil
 }
 
-func (g *GKEOrchestrator) calculateResourceLimits(opts ManifestOptions) (cpu, mem, gpu, tpu string, err error) {
+func (g *GKEOrchestrator) calculateResourceLimits(opts ManifestOptions, profile JobProfile) (cpu, mem, gpu, tpu string, err error) {
 	mapped := g.GenerateGKENodeSelectorLabel(opts.AcceleratorType)
 
 	if opts.AcceleratorType != "" {
@@ -1306,31 +1454,15 @@ func (g *GKEOrchestrator) calculateResourceLimits(opts ManifestOptions) (cpu, me
 			}
 			// Let it fall through to the hardcoded NVIDIA/TPU fallbacks below!
 		} else {
-			machineName := g.resolveMachineName(opts.AcceleratorType)
-
-			count, err := g.FetchMachineCapacity(machineName, opts.ClusterLocation)
+			cpuLim, memLim, gpuLim, tpuLim, err := g.calculateGCPMachineResourceLimits(opts, profile, mapped)
 			if err != nil {
-				return "", "", "", "", fmt.Errorf("failed to resolve machine type %s: %w", machineName, err)
+				return "", "", "", "", err
 			}
-
-			if count > 0 {
-				logging.Info("Dynamically determined capacity for %s: %d", machineName, count)
-
-				if strings.Contains(strings.ToLower(mapped), "nvidia") {
-					return "", "", fmt.Sprintf("%d", count), "", nil
-				}
-				if strings.Contains(strings.ToLower(mapped), "tpu") {
-					return "", "", "", fmt.Sprintf("%d", count), nil
-				}
-
-				logging.Info("Interpreted %s as a CPU-only machine with %d vCPUs", machineName, count)
-				offsetVCPUs := int(float64(count) * 0.95)
-				if offsetVCPUs < 1 {
-					offsetVCPUs = 1
-				}
-				return fmt.Sprintf("%d", offsetVCPUs), "", "", "", nil
+			if cpuLim != "" || memLim != "" || gpuLim != "" || tpuLim != "" {
+				return cpuLim, memLim, gpuLim, tpuLim, nil
 			}
 		}
+
 	}
 
 	if strings.Contains(strings.ToLower(mapped), "nvidia") {
@@ -1344,29 +1476,58 @@ func (g *GKEOrchestrator) calculateResourceLimits(opts ManifestOptions) (cpu, me
 		return "", "", "", "", fmt.Errorf("--accelerator (machine type) is required for submission to determine resource limits (XPK strict enforcement)")
 	}
 
-	return "", "", "", "", fmt.Errorf("unreachable fallback reached for machine type %s", opts.AcceleratorType)
+	return "", "", "", "", fmt.Errorf("could not determine resource limits for %s", opts.AcceleratorType)
 }
 
+func (g *GKEOrchestrator) calculateGCPMachineResourceLimits(opts ManifestOptions, profile JobProfile, mapped string) (cpu, mem, gpu, tpu string, err error) {
+	if profile.IsCPUMachine {
+		cpuLim, err := g.calculateCPUMachineResourceLimits(opts, profile)
+		if err != nil {
+			return "", "", "", "", err
+		}
+		return cpuLim, "", "", "", nil
+	}
+
+	machineName := g.resolveMachineName(opts.AcceleratorType)
+
+	count, err := g.FetchMachineCapacity(machineName, opts.ClusterLocation)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("failed to resolve machine type %s: %w", machineName, err)
+	}
+
+	if count > 0 {
+		logging.Info("Dynamically determined capacity for %s: %d", machineName, count)
+
+		if strings.Contains(strings.ToLower(mapped), "nvidia") {
+			return "", "", fmt.Sprintf("%d", count), "", nil
+		}
+		if strings.Contains(strings.ToLower(mapped), "tpu") {
+			return "", "", "", fmt.Sprintf("%d", count), nil
+		}
+	}
+	return "", "", "", "", nil
+}
+
+
+func (g *GKEOrchestrator) calculateCPUMachineResourceLimits(opts ManifestOptions, profile JobProfile) (string, error) {
+	count := profile.CapacityCount
+	logging.Info("Using cached capacity for CPU machine %s during limits calculation: %d", opts.AcceleratorType, count)
+
+	offsetVCPUs := int(float64(count) * 0.95)
+	if offsetVCPUs < 1 {
+		offsetVCPUs = 1
+	}
+	return fmt.Sprintf("%d", offsetVCPUs), nil
+}
+
+
 func (g *GKEOrchestrator) resolveMachineName(acceleratorType string) string {
-	machineTypeMap := map[string]string{
-		"nvidia-l4":             "g2-standard-12",
-		"nvidia-tesla-a100":     "a2-highgpu-1g",
-		"nvidia-a100-80gb":      "a3-highgpu-8g",
-		"nvidia-h100-80gb":      "a3-highgpu-8g",
-		"nvidia-h100-mega-80gb": "a3-megagpu-8g",
-		"nvidia-h200-141gb":     "a3-ultragpu-8g",
-		"nvidia-b200":           "a4-highgpu-8g",
-		"nvidia-gb200":          "a4x-highgpu-4g",
-		"tpu-v7":                "tpu7-standard-1t",
-		"tpu-v7x":               "tpu7x-standard-4t",
-		"tpu-v6e-slice":         "ct6e-standard-4t",
-		"tpu-v5p-slice":         "ct5p-hightpu-4t",
-		"tpu-v5-lite-podslice":  "ct5lp-hightpu-4t",
-		"tpu-v4-podslice":       "ct4p-hightpu-4t",
+	if mappedName, exists := acceleratorShorthandMap[acceleratorType]; exists {
+		return mappedName
 	}
 
 	mapped := g.GenerateGKENodeSelectorLabel(acceleratorType)
-	if mappedName, exists := machineTypeMap[mapped]; exists {
+	if mappedName, exists := acceleratorShorthandMap[mapped]; exists {
 		return mappedName
 	}
 	return acceleratorType
@@ -1434,7 +1595,7 @@ func (g *GKEOrchestrator) indentYaml(s string, indent int) string {
 	return strings.Join(result, "\n")
 }
 
-func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition, fullImageName string) (ManifestOptions, error) {
+func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition, fullImageName string) (ManifestOptions, JobProfile, error) {
 	schedOpts := scheduling.SchedulingOptions{
 		PlacementPolicy:    job.PlacementPolicy,
 		NodeAffinityLabels: job.NodeSelector,
@@ -1444,7 +1605,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 
 	topology, err := g.resolveTopology(job.Topology, job.AcceleratorType, job.ClusterName, job.ClusterLocation)
 	if err != nil {
-		return ManifestOptions{}, err
+		return ManifestOptions{}, JobProfile{}, err
 	}
 	schedOpts.Topology = topology
 
@@ -1454,21 +1615,24 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 		AcceleratorType: job.AcceleratorType,
 	})
 
-	isCPUMachine := g.determineIfCPUMachine(job)
+	isCPUMachine, capacity, err := g.determineIfCPUMachine(job)
+	if err != nil {
+		return ManifestOptions{}, JobProfile{}, err
+	}
 
 	nodeSelectorStr, err := g.buildNodeSelector(schedOpts, job, isSuperSlicing, isCPUMachine)
 	if err != nil {
-		return ManifestOptions{}, err
+		return ManifestOptions{}, JobProfile{}, err
 	}
 
 	affinityStr, err := g.buildAffinity(schedOpts)
 	if err != nil {
-		return ManifestOptions{}, err
+		return ManifestOptions{}, JobProfile{}, err
 	}
 
 	podFailurePolicyStr, err := g.generatePodFailurePolicy(job.RestartOnExitCodes)
 	if err != nil {
-		return ManifestOptions{}, err
+		return ManifestOptions{}, JobProfile{}, err
 	}
 	podFailurePolicyStr = g.indentYaml(podFailurePolicyStr, 12)
 
@@ -1484,7 +1648,7 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 	if len(tolerations) > 0 {
 		b, err := k8syaml.Marshal(tolerations)
 		if err != nil {
-			return ManifestOptions{}, fmt.Errorf("failed to marshal tolerations: %w", err)
+			return ManifestOptions{}, JobProfile{}, fmt.Errorf("failed to marshal tolerations: %w", err)
 		}
 		tolerationsStr = g.indentYaml(string(b), 16)
 	}
@@ -1517,50 +1681,44 @@ func (g *GKEOrchestrator) prepareManifestOptions(job orchestrator.JobDefinition,
 
 	g.addVolumeOptions(&opts, job.Volumes)
 
-	return opts, nil
+	profile := JobProfile{
+		IsCPUMachine:  isCPUMachine,
+		CapacityCount: capacity,
+	}
+
+	return opts, profile, nil
 }
 
-func (g *GKEOrchestrator) determineIfCPUMachine(job orchestrator.JobDefinition) bool {
-	if job.ClusterLocation != "" && job.AcceleratorType != "" {
-		machineTypeMap := map[string]string{
-			"nvidia-l4":             "g2-standard-12",
-			"nvidia-tesla-a100":     "a2-highgpu-1g",
-			"nvidia-a100-80gb":      "a3-highgpu-8g",
-			"nvidia-h100-80gb":      "a3-highgpu-8g",
-			"nvidia-h100-mega-80gb": "a3-megagpu-8g",
-			"nvidia-h200-141gb":     "a3-ultragpu-8g",
-			"nvidia-b200":           "a4-highgpu-8g",
-			"nvidia-gb200":          "a4x-highgpu-4g",
-			"tpu-v7":                "tpu7-standard-1t",
-			"tpu-v7x":               "tpu7x-standard-4t",
-			"tpu-v6e-slice":         "ct6e-standard-4t",
-			"tpu-v5p-slice":         "ct5p-hightpu-4t",
-			"tpu-v5-lite-podslice":  "ct5lp-hightpu-4t",
-			"tpu-v4-podslice":       "ct4p-hightpu-4t",
-		}
+func (g *GKEOrchestrator) determineIfCPUMachine(job orchestrator.JobDefinition) (bool, int, error) {
+	if _, exists := acceleratorShorthandMap[job.AcceleratorType]; exists {
+		return false, 0, nil
+	}
 
-		mapped := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
-		machineName := job.AcceleratorType
-		if mappedName, exists := machineTypeMap[mapped]; exists {
-			machineName = mappedName
-		}
-
-		if count, err := g.FetchMachineCapacity(machineName, job.ClusterLocation); err == nil && count > 0 {
-			if !strings.Contains(strings.ToLower(mapped), "nvidia") && !isTPUFallback(mapped) {
-				logging.Info("Dynamically determined %s is a CPU-only machine during manifest preparation", machineName)
-				return true
-			}
-		} else if err != nil {
-			logging.Warn("Failed to resolve machine type %s during manifest preparation: %v. Proceeding.", machineName, err)
-		}
-	} else if job.ClusterLocation == "" && job.AcceleratorType != "" {
-		mapped := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
-		if !strings.Contains(strings.ToLower(mapped), "nvidia") && !isTPUFallback(mapped) {
-			logging.Warn("Zone is empty for machine type %s. Contextually treating it as a CPU machine for dry-run.", job.AcceleratorType)
-			return true
+	for _, realMachine := range acceleratorShorthandMap {
+		if job.AcceleratorType == realMachine {
+			return false, 0, nil
 		}
 	}
-	return false
+
+	mapped := g.GenerateGKENodeSelectorLabel(job.AcceleratorType)
+	if strings.Contains(strings.ToLower(mapped), "nvidia") || isTPUFallback(mapped) {
+		return false, 0, nil
+	}
+
+	if job.ClusterLocation != "" && job.AcceleratorType != "" {
+		count, err := g.FetchMachineCapacity(job.AcceleratorType, job.ClusterLocation)
+		if err != nil {
+			return false, 0, fmt.Errorf("failed to describe machine type %s: %w", job.AcceleratorType, err)
+		}
+		if count > 0 {
+			logging.Info("Dynamically determined %s is a CPU-only machine during manifest preparation", job.AcceleratorType)
+			return true, count, nil
+		}
+	} else if job.ClusterLocation == "" && job.AcceleratorType != "" {
+		logging.Warn("Zone is empty for machine type %s. Contextually treating it as a CPU machine for dry-run.", job.AcceleratorType)
+		return true, 1, nil
+	}
+	return false, 0, nil
 }
 
 func (g *GKEOrchestrator) addVolumeOptions(opts *ManifestOptions, vols []orchestrator.VolumeDefinition) {

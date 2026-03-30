@@ -255,11 +255,12 @@ func submitGKEJob(jobDef orchestrator.JobDefinition) error {
 			return fmt.Errorf("failed to generate pathways manifest: %v", err)
 		}
 	} else {
-		manifestOpts, err := gkeOrchestrator.PrepareManifestOptions(jobDef, fullImageName)
+		manifestOpts, profile, err := gkeOrchestrator.PrepareManifestOptions(jobDef, fullImageName)
 		if err != nil {
 			return fmt.Errorf("failed to prepare manifest options: %v", err)
 		}
-		manifestContent, err = gkeOrchestrator.GenerateGKEManifest(manifestOpts)
+		manifestContent, err = gkeOrchestrator.GenerateGKEManifest(manifestOpts, profile)
+
 		if err != nil {
 			return fmt.Errorf("failed to generate GKE manifest: %v", err)
 		}

@@ -144,14 +144,14 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 			}
 			orc := &GKEOrchestrator{executor: NewMockExecutor(mockResponses)}
 
-			opts, err := orc.prepareManifestOptions(job, "test-image:latest")
+			opts, profile, err := orc.prepareManifestOptions(job, "test-image:latest")
 			if err != nil {
 				t.Fatalf("prepareManifestOptions failed: %v", err)
 			}
 			// prepareManifestOptions doesn't set limits in opts (GenerateGKEManifest does),
 			// but it sets NodeSelector string which is key for labels.
 
-			manifest, err := orc.GenerateGKEManifest(opts)
+			manifest, err := orc.GenerateGKEManifest(opts, profile)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("GenerateGKEManifest returned error %v, wantErr %v", err, tt.wantErr)
 			}
@@ -194,12 +194,13 @@ func TestGenerateGKEManifest_Volumes(t *testing.T) {
 		},
 	}
 
-	opts, err := orc.prepareManifestOptions(job, "test-image:latest")
+	opts, profile, err := orc.prepareManifestOptions(job, "test-image:latest")
 	if err != nil {
 		t.Fatalf("prepareManifestOptions failed: %v", err)
 	}
 
-	manifest, err := orc.GenerateGKEManifest(opts)
+	manifest, err := orc.GenerateGKEManifest(opts, profile)
+
 	if err != nil {
 		t.Fatalf("GenerateGKEManifest failed: %v", err)
 	}
@@ -237,7 +238,8 @@ func TestGenerateGKEManifest_CommandEscaping(t *testing.T) {
 		AcceleratorType: "nvidia-l4",
 	}
 
-	manifest, err := orc.GenerateGKEManifest(opts)
+	manifest, err := orc.GenerateGKEManifest(opts, JobProfile{})
+
 	if err != nil {
 		t.Fatalf("GenerateGKEManifest failed: %v", err)
 	}
@@ -451,10 +453,10 @@ func TestFetchMachineCapacity(t *testing.T) {
 		},
 		{
 			name:        "Total failure after retries",
-			machineType: "g2-standard-48",
+			machineType: "unknown-machine-type",
 			zone:        "us-central1-a",
 			mockResponses: map[string][]shell.CommandResult{
-				"gcloud compute machine-types describe g2-standard-48 --zone=us-central1-a --format=json": {
+				"gcloud compute machine-types describe unknown-machine-type --zone=us-central1-a --format=json": {
 					{ExitCode: 1, Stderr: "slow network"},
 					{ExitCode: 1, Stderr: "slow network"},
 					{ExitCode: 1, Stderr: "slow network"},

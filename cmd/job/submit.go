@@ -37,7 +37,7 @@ var (
 
 	workloadName            string
 	kueueQueueName          string
-	numSlices               int
+	numSlicesOrNodes        int
 	vmsPerSlice             int
 	maxRestarts             int
 	ttlSecondsAfterFinished int
@@ -108,7 +108,7 @@ func init() {
 
 	SubmitCmd.Flags().StringVarP(&workloadName, "name", "n", "", "Name of the workload to create. Required.")
 	SubmitCmd.Flags().StringVar(&kueueQueueName, "kueue-queue", "", "Name of the Kueue LocalQueue to submit the workload to. If empty, it will be auto-discovered.")
-	SubmitCmd.Flags().IntVar(&numSlices, "nodes", 1, "Number of JobSet replicas (or Slices for TPUs).")
+	SubmitCmd.Flags().IntVar(&numSlicesOrNodes, "nodes", 1, "Number of JobSet replicas (or Slices for TPUs).")
 	SubmitCmd.Flags().IntVar(&vmsPerSlice, "vms-per-slice", 1, "Number of VMs (pods) per slice.")
 	SubmitCmd.Flags().IntVar(&maxRestarts, "max-restarts", 1, "Maximum number of restarts for the JobSet before failing.")
 	SubmitCmd.Flags().IntVar(&ttlSecondsAfterFinished, "ttl-seconds-after-finished", 3600, "Time (in seconds) to retain the JobSet after it finishes.")
@@ -140,6 +140,8 @@ func init() {
 	SubmitCmd.Flags().StringSliceVar(&volumeStr, "volume", nil, "Volumes to mount (format: <src>:<dest>).")
 
 	_ = SubmitCmd.MarkFlagRequired("command")
+	_ = SubmitCmd.MarkFlagRequired("accelerator")
+	_ = SubmitCmd.MarkFlagRequired("cluster")
 }
 
 func runSubmitCmd(cmd *cobra.Command, args []string) {
@@ -176,7 +178,7 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 		ClusterLocation:         clusterLocation,
 		WorkloadName:            workloadName,
 		KueueQueueName:          kueueQueueName,
-		NumSlices:               numSlices,
+		NumSlices:               numSlicesOrNodes,
 		VmsPerSlice:             vmsPerSlice,
 		MaxRestarts:             maxRestarts,
 		TtlSecondsAfterFinished: ttlSecondsAfterFinished,

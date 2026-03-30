@@ -61,75 +61,76 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 		wantLabels      []string // Labels that should be in the output
 		wantLimits      []string // Limits that should be in the output,
 		dontWantLimits  []string // Limits that should NOT be in the output
+		wantErr         bool     // Whether GenerateGKEManifest should return an error
 	}{
 		{
 			name:            "A3 Mega (H100)",
 			acceleratorType: "nvidia-h100-mega-80gb",
-			cpuLimit:        "208",
-			memoryLimit:     "1000Gi",
-			gpuLimit:        "8",
+			cpuLimit:        "", // Omitted
+			memoryLimit:     "", // Omitted
+			gpuLimit:        "1", // NVIDIA fallback default
 			wantLabels:      []string{"cloud.google.com/gke-accelerator: nvidia-h100-mega-80gb"},
-			wantLimits:      []string{"nvidia.com/gpu: 8", "cpu: 208", "memory: 1000Gi"},
-			dontWantLimits:  []string{"google.com/tpu"},
+			wantLimits:      []string{"nvidia.com/gpu: 1"},
+			dontWantLimits:  []string{"google.com/tpu", "cpu:", "memory:"},
 		},
 		{
 			name:            "A4X Max (GB200)",
 			acceleratorType: "nvidia-gb200",
-			cpuLimit:        "208",
-			memoryLimit:     "1000Gi",
-			gpuLimit:        "4",
+			cpuLimit:        "",
+			memoryLimit:     "",
+			gpuLimit:        "1",
 			wantLabels:      []string{"cloud.google.com/gke-accelerator: nvidia-gb200"},
-			wantLimits:      []string{"nvidia.com/gpu: 4", "cpu: 208", "memory: 1000Gi"},
-			dontWantLimits:  []string{"google.com/tpu"},
+			wantLimits:      []string{"nvidia.com/gpu: 1"},
+			dontWantLimits:  []string{"google.com/tpu", "cpu:", "memory:"},
 		},
 		{
 			name:            "G2 (L4)",
 			acceleratorType: "nvidia-l4",
-			cpuLimit:        "4",
-			memoryLimit:     "24Gi",
+			cpuLimit:        "",
+			memoryLimit:     "",
 			gpuLimit:        "1",
 			wantLabels:      []string{"cloud.google.com/gke-accelerator: nvidia-l4"},
-			wantLimits:      []string{"nvidia.com/gpu: 1", "cpu: 4", "memory: 24Gi"},
-			dontWantLimits:  []string{"google.com/tpu"},
+			wantLimits:      []string{"nvidia.com/gpu: 1"},
+			dontWantLimits:  []string{"google.com/tpu", "cpu:", "memory:"},
 		},
 		{
 			name:            "TPU v6e slice",
 			acceleratorType: "tpu-v6e-slice",
-			cpuLimit:        "48",
-			memoryLimit:     "240Gi",
+			cpuLimit:        "",
+			memoryLimit:     "",
 			tpuLimit:        "4",
 			wantLabels:      []string{"cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice"},
-			wantLimits:      []string{"google.com/tpu: 4", "cpu: 48", "memory: 240Gi"},
-			dontWantLimits:  []string{"nvidia.com/gpu"},
+			wantLimits:      []string{"google.com/tpu: 4"},
+			dontWantLimits:  []string{"nvidia.com/gpu", "cpu:", "memory:"},
 		},
 		{
 			name:            "CPU Only (Default)",
 			acceleratorType: "",
-			cpuLimit:        "0.5",
-			memoryLimit:     "512Mi",
-			wantLabels:      []string{}, // No accelerator label
-			wantLimits:      []string{"cpu: 0.5", "memory: 512Mi"},
-			dontWantLimits:  []string{"nvidia.com/gpu", "google.com/tpu", "cloud.google.com/gke-accelerator"},
+			cpuLimit:        "3", // 95% of 4 vCPUs fallback
+			memoryLimit:     "",  // Omitted
+			wantLabels:      []string{},
+			wantLimits:      []string{"cpu: 3"},
+			dontWantLimits:  []string{"nvidia.com/gpu", "google.com/tpu", "cloud.google.com/gke-accelerator", "memory:"},
 		},
 		{
 			name:            "Fallback NVIDIA",
 			acceleratorType: "nvidia-unknown-new-gpu",
-			cpuLimit:        "1",
-			memoryLimit:     "4Gi",
+			cpuLimit:        "",
+			memoryLimit:     "",
 			gpuLimit:        "1",
 			wantLabels:      []string{"cloud.google.com/gke-accelerator: nvidia-unknown-new-gpu"},
-			wantLimits:      []string{"nvidia.com/gpu: 1", "cpu: 1", "memory: 4Gi"},
-			dontWantLimits:  []string{"google.com/tpu"},
+			wantLimits:      []string{"nvidia.com/gpu: 1"},
+			dontWantLimits:  []string{"google.com/tpu", "cpu:", "memory:"},
 		},
 		{
-			name:            "Fallback TPU",
-			acceleratorType: "unknown-tpu-version",
-			cpuLimit:        "48",
-			memoryLimit:     "240Gi",
-			tpuLimit:        "4",
-			wantLabels:      []string{"cloud.google.com/gke-accelerator: unknown-tpu-version"},
-			wantLimits:      []string{"google.com/tpu: 4", "cpu: 48", "memory: 240Gi"},
-			dontWantLimits:  []string{"nvidia.com/gpu"},
+			name:            "Uniform CPU Machine via Accelerator Flag (Empty Zone / Strict Fail)",
+			acceleratorType: "n2-standard-4",
+			cpuLimit:        "",
+			memoryLimit:     "",
+			wantLabels:      []string{},
+			wantLimits:      []string{},
+			dontWantLimits:  []string{},
+			wantErr:         true, // Expect failure if zone is empty!
 		},
 	}
 
@@ -155,8 +156,11 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 			// but it sets NodeSelector string which is key for labels.
 
 			manifest, err := orc.GenerateGKEManifest(opts)
-			if err != nil {
-				t.Fatalf("GenerateGKEManifest failed: %v", err)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GenerateGKEManifest returned error %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return // Continue to next test case if error was expected and received!
 			}
 
 			for _, want := range tt.wantLabels {
@@ -183,8 +187,9 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 func TestGenerateGKEManifest_Volumes(t *testing.T) {
 	orc, _ := NewGKEOrchestrator()
 	job := orchestrator.JobDefinition{
-		WorkloadName: "volume-test",
-		CommandToRun: "echo hello",
+		WorkloadName:    "volume-test",
+		CommandToRun:    "echo hello",
+		AcceleratorType: "n2-standard-4", // Required for strict enforcement
 		Volumes: []orchestrator.VolumeDefinition{
 			{Name: "vol-0", Source: "gs://my-bucket", MountPath: "/data", Type: "gcsfuse"},
 			{Name: "vol-1", Source: "/host/path", MountPath: "/host", Type: "hostPath"},

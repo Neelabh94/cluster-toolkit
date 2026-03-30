@@ -63,6 +63,7 @@ func TestSubmitCmd_PathwaysDryRun(t *testing.T) {
 		"--pathways-server-image", "server:latest",
 		"--pathways-worker-image", "worker:latest",
 		"--pathways-gcs-location", "gs://my-bucket",
+		"--accelerator", "n2-standard-4",
 	)
 
 	if err != nil {
@@ -104,7 +105,7 @@ func resetSubmitCmdFlags() {
 	projectID = ""
 	workloadName = ""
 	kueueQueueName = ""
-	numSlices = 1
+	numSlicesOrNodes = 1
 	vmsPerSlice = 1
 	maxRestarts = 1
 	ttlSecondsAfterFinished = 3600

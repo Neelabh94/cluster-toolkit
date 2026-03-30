@@ -66,8 +66,8 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 		{
 			name:            "A3 Mega (H100)",
 			acceleratorType: "nvidia-h100-mega-80gb",
-			cpuLimit:        "", // Omitted
-			memoryLimit:     "", // Omitted
+			cpuLimit:        "",  // Omitted
+			memoryLimit:     "",  // Omitted
 			gpuLimit:        "1", // NVIDIA fallback default
 			wantLabels:      []string{"cloud.google.com/gke-accelerator: nvidia-h100-mega-80gb"},
 			wantLimits:      []string{"nvidia.com/gpu: 1"},
@@ -106,11 +106,7 @@ func TestGenerateGKEManifest_Accelerators(t *testing.T) {
 		{
 			name:            "CPU Only (Default)",
 			acceleratorType: "",
-			cpuLimit:        "3", // 95% of 4 vCPUs fallback
-			memoryLimit:     "",  // Omitted
-			wantLabels:      []string{},
-			wantLimits:      []string{"cpu: 3"},
-			dontWantLimits:  []string{"nvidia.com/gpu", "google.com/tpu", "cloud.google.com/gke-accelerator", "memory:"},
+			wantErr:         true, // Empty accelerator is no longer allowed
 		},
 		{
 			name:            "Fallback NVIDIA",
@@ -189,6 +185,7 @@ func TestGenerateGKEManifest_Volumes(t *testing.T) {
 	job := orchestrator.JobDefinition{
 		WorkloadName:    "volume-test",
 		CommandToRun:    "echo hello",
+		ClusterLocation: "us-central1-a",
 		AcceleratorType: "n2-standard-4", // Required for strict enforcement
 		Volumes: []orchestrator.VolumeDefinition{
 			{Name: "vol-0", Source: "gs://my-bucket", MountPath: "/data", Type: "gcsfuse"},

@@ -3,8 +3,8 @@ package gke
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"hpc-toolkit/pkg/orchestrator"
+	"strings"
 )
 
 // ListEnvironments discovers all available target environments.

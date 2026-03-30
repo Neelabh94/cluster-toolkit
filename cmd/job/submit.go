@@ -80,7 +80,7 @@ and JobSet/Kueue specific configurations like workload name, queue, nodes, and r
 		logging.Info("Running prerequisite checks for 'gcluster job submit'...")
 		err := prereq.EnsurePrerequisites(&projectID)
 		if err != nil {
-			return fmt.Errorf("prerequisite checks failed: %w", err)
+			return fmt.Errorf("prerequisite checks failed for 'gcluster job submit'. Please ensure your gcloud configuration and cluster context are valid: %w", err)
 		}
 
 		allowedPriorities := map[string]bool{
@@ -202,7 +202,7 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 	}
 
 	if err := submitGKEJob(jobDef); err != nil {
-		logging.Fatal("gcluster job submit failed: %v", err)
+		logging.Fatal("failed to submit job to GKE cluster '%s' in location '%s': %v", clusterName, clusterLocation, err)
 	}
 
 	if outputManifest == "" {
@@ -240,7 +240,7 @@ func parseVolumeFlag(vStrs []string) []orchestrator.VolumeDefinition {
 func submitGKEJob(jobDef orchestrator.JobDefinition) error {
 	gkeOrchestrator, err := gkeOrchestratorFactory()
 	if err != nil {
-		return fmt.Errorf("failed to create GKE orchestrator: %v", err)
+		return fmt.Errorf("failed to initialize GKE orchestrator. Check if kubectl is configured and cluster '%s' is accessible: %v", jobDef.ClusterName, err)
 	}
 
 	if outputManifest == "" {

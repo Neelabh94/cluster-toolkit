@@ -31,6 +31,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/spf13/cobra"
 
+	"hpc-toolkit/cmd/cluster"
 	"hpc-toolkit/cmd/job" // New import
 )
 
@@ -67,6 +68,7 @@ func init() {
 		initDependencies(cmd)
 	}
 
+	rootCmd.AddCommand(cluster.ClusterCmd)
 	rootCmd.AddCommand(job.JobCmd) // Add the new job command
 }
 

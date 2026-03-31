@@ -15,9 +15,9 @@
 package job
 
 import (
+	"fmt"
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
-	"hpc-toolkit/pkg/orchestrator/gke"
 
 	"github.com/spf13/cobra"
 )
@@ -26,20 +26,20 @@ var CancelJobCmd = &cobra.Command{
 	Use:          "cancel [job-name]",
 	Short:        "Cancel a job from the cluster.",
 	Args:         cobra.ExactArgs(1),
-	Run:          runCancelJob,
+	RunE:         runCancelJob,
 	SilenceUsage: true,
 }
 
 func init() {
 }
 
-func runCancelJob(cmd *cobra.Command, args []string) {
+func runCancelJob(cmd *cobra.Command, args []string) error {
 	jobName := args[0]
 	logging.Info("Cancelling job %s...", jobName)
 
-	orc, err := gke.NewGKEOrchestrator()
+	orc, err := gkeOrchestratorFactory()
 	if err != nil {
-		logging.Fatal("Failed to create orchestrator: %v", err)
+		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
 	opts := orchestrator.CancelOptions{
@@ -49,6 +49,7 @@ func runCancelJob(cmd *cobra.Command, args []string) {
 	}
 
 	if err := orc.CancelJob(jobName, opts); err != nil {
-		logging.Fatal("Failed to cancel job: %v", err)
+		return fmt.Errorf("failed to cancel job: %w", err)
 	}
+	return nil
 }

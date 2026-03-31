@@ -16,12 +16,10 @@ package job
 
 import (
 	"fmt"
-	"os"
 	"text/tabwriter"
 
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
-	"hpc-toolkit/pkg/orchestrator/gke"
 
 	"github.com/spf13/cobra"
 )
@@ -34,7 +32,7 @@ var (
 var ListWorkloadsCmd = &cobra.Command{
 	Use:          "list",
 	Short:        "List workloads (jobs) in the cluster.",
-	Run:          runListWorkloads,
+	RunE:         runListWorkloads,
 	SilenceUsage: true,
 }
 
@@ -43,12 +41,12 @@ func init() {
 	ListWorkloadsCmd.Flags().StringVar(&filterName, "name-contains", "", "Filter jobs by name.")
 }
 
-func runListWorkloads(cmd *cobra.Command, args []string) {
+func runListWorkloads(cmd *cobra.Command, args []string) error {
 	logging.Info("Listing jobs...")
 
-	orc, err := gke.NewGKEOrchestrator()
+	orc, err := gkeOrchestratorFactory()
 	if err != nil {
-		logging.Fatal("Failed to create orchestrator: %v", err)
+		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
 	opts := orchestrator.ListOptions{
@@ -61,13 +59,14 @@ func runListWorkloads(cmd *cobra.Command, args []string) {
 
 	jobs, err := orc.ListJobs(opts)
 	if err != nil {
-		logging.Fatal("Failed to list jobs: %v", err)
+		return fmt.Errorf("failed to list jobs: %w", err)
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
 	fmt.Fprintln(w, "NAME	STATUS	CREATION_TIME	COMPLETION_TIME")
 	for _, job := range jobs {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", job.Name, job.Status, job.CreationTime, job.CompletionTime)
 	}
 	w.Flush()
+	return nil
 }

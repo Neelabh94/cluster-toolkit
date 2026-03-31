@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
-	"hpc-toolkit/pkg/orchestrator/gke"
 
 	"github.com/spf13/cobra"
 )
@@ -26,20 +25,20 @@ import (
 var InfoCmd = &cobra.Command{
 	Use:          "info",
 	Short:        "Show summarized status of the current target cluster's resources.",
-	Run:          runClusterInfo,
+	RunE:         runClusterInfo,
 	SilenceUsage: true,
 }
 
-func runClusterInfo(cmd *cobra.Command, args []string) {
+func runClusterInfo(cmd *cobra.Command, args []string) error {
 	if clusterName == "" || clusterLocation == "" {
-		logging.Fatal("--cluster and --cluster-region are required for info")
+		return fmt.Errorf("--cluster and --cluster-region are required for info")
 	}
 
 	logging.Info("Fetching cluster info for %s...", clusterName)
 
-	orc, err := gke.NewGKEOrchestrator()
+	orc, err := gkeOrchestratorFactory()
 	if err != nil {
-		logging.Fatal("Failed to create orchestrator: %v", err)
+		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
 	opts := orchestrator.ListOptions{
@@ -49,8 +48,9 @@ func runClusterInfo(cmd *cobra.Command, args []string) {
 
 	info, err := orc.GetClusterInfo(clusterName, opts)
 	if err != nil {
-		logging.Fatal("Failed to get cluster info: %v", err)
+		return fmt.Errorf("failed to get cluster info: %w", err)
 	}
 
 	fmt.Println(info)
+	return nil
 }

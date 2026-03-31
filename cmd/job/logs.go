@@ -18,28 +18,28 @@ import (
 	"fmt"
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
-	"hpc-toolkit/pkg/orchestrator/gke"
 
 	"github.com/spf13/cobra"
 )
 
 var LogsCmd = &cobra.Command{
-	Use:   "logs [job-name]",
-	Short: "Fetch logs for a job in the cluster.",
-	Args:  cobra.ExactArgs(1),
-	Run:   runLogsCmd,
+	Use:          "logs [job-name]",
+	Short:        "Fetch logs for a job in the cluster.",
+	Args:         cobra.ExactArgs(1),
+	RunE:         runLogsCmd,
+	SilenceUsage: true,
 }
 
 func init() {
 }
 
-func runLogsCmd(cmd *cobra.Command, args []string) {
+func runLogsCmd(cmd *cobra.Command, args []string) error {
 	jobName := args[0]
 	logging.Info("Fetching logs for job %s...", jobName)
 
-	orc, err := gke.NewGKEOrchestrator()
+	orc, err := gkeOrchestratorFactory()
 	if err != nil {
-		logging.Fatal("Failed to create orchestrator: %v", err)
+		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
 	opts := orchestrator.LogsOptions{
@@ -50,8 +50,9 @@ func runLogsCmd(cmd *cobra.Command, args []string) {
 
 	output, err := orc.GetJobLogs(jobName, opts)
 	if err != nil {
-		logging.Fatal("Failed to get logs: %v", err)
+		return fmt.Errorf("failed to get logs: %w", err)
 	}
 
 	fmt.Println(output)
+	return nil
 }

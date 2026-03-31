@@ -16,12 +16,10 @@ package cluster
 
 import (
 	"fmt"
-	"os"
 	"text/tabwriter"
 
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
-	"hpc-toolkit/pkg/orchestrator/gke"
 
 	"github.com/spf13/cobra"
 )
@@ -29,16 +27,16 @@ import (
 var ListCmd = &cobra.Command{
 	Use:          "list",
 	Short:        "List available target clusters and environments.",
-	Run:          runListClusters,
+	RunE:         runListClusters,
 	SilenceUsage: true,
 }
 
-func runListClusters(cmd *cobra.Command, args []string) {
+func runListClusters(cmd *cobra.Command, args []string) error {
 	logging.Info("Listing clusters...")
 
-	orc, err := gke.NewGKEOrchestrator()
+	orc, err := gkeOrchestratorFactory()
 	if err != nil {
-		logging.Fatal("Failed to create orchestrator: %v", err)
+		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
 	opts := orchestrator.ListOptions{
@@ -47,13 +45,14 @@ func runListClusters(cmd *cobra.Command, args []string) {
 
 	clusters, err := orc.ListEnvironments(opts)
 	if err != nil {
-		logging.Fatal("Failed to list clusters: %v", err)
+		return fmt.Errorf("failed to list clusters: %w", err)
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME	LOCATION	STATUS")
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "NAME\tLOCATION\tSTATUS")
 	for _, c := range clusters {
 		fmt.Fprintf(w, "%s\t%s\t%s\n", c.Name, c.Location, c.Status)
 	}
 	w.Flush()
+	return nil
 }

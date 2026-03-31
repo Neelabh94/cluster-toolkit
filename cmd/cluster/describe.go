@@ -26,20 +26,24 @@ import (
 var DescribeCmd = &cobra.Command{
 	Use:          "describe",
 	Short:        "Details the specific environment exhaustively (hardware, exact configs, networking).",
-	Run:          runClusterDescribe,
+	RunE:         runClusterDescribe,
 	SilenceUsage: true,
 }
 
-func runClusterDescribe(cmd *cobra.Command, args []string) {
+var gkeOrchestratorFactory = func() (*gke.GKEOrchestrator, error) {
+	return gke.NewGKEOrchestrator()
+}
+
+func runClusterDescribe(cmd *cobra.Command, args []string) error {
 	if clusterName == "" || clusterLocation == "" {
-		logging.Fatal("--cluster and --cluster-region are required for describe")
+		return fmt.Errorf("--cluster and --cluster-region are required for describe")
 	}
 
 	logging.Info("Describing cluster %s...", clusterName)
 
-	orc, err := gke.NewGKEOrchestrator()
+	orc, err := gkeOrchestratorFactory()
 	if err != nil {
-		logging.Fatal("Failed to create orchestrator: %v", err)
+		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
 	opts := orchestrator.ListOptions{
@@ -49,8 +53,9 @@ func runClusterDescribe(cmd *cobra.Command, args []string) {
 
 	description, err := orc.DescribeEnvironment(clusterName, opts)
 	if err != nil {
-		logging.Fatal("Failed to describe cluster: %v", err)
+		return fmt.Errorf("failed to describe cluster: %w", err)
 	}
 
 	fmt.Println(description)
+	return nil
 }

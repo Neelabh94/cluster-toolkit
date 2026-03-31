@@ -74,7 +74,7 @@ or built on-the-fly using Crane (--base-image with --build-context).
 
 It accepts parameters for the container image, command to execute, accelerator type,
 and JobSet/Kueue specific configurations like workload name, queue, nodes, and restarts.`,
-	Run: runSubmitCmd,
+	RunE: runSubmitCmd,
 
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		logging.Info("Running prerequisite checks for 'gcluster job submit'...")
@@ -148,25 +148,30 @@ func init() {
 	_ = SubmitCmd.MarkFlagRequired("cluster")
 }
 
-func runSubmitCmd(cmd *cobra.Command, args []string) {
+func runSubmitCmd(cmd *cobra.Command, args []string) error {
 	logging.Info("Executing gcluster job submit command...")
 
 	if imageName == "" && baseImage == "" {
-		logging.Fatal("Either --image or --base-image must be provided.")
+		return fmt.Errorf("either --image or --base-image must be provided")
 	}
 	if imageName != "" && baseImage != "" {
-		logging.Fatal("Cannot provide both --image and --base-image.")
+		return fmt.Errorf("cannot provide both --image and --base-image")
 	}
 	if imageName != "" && buildContext != "" {
-		logging.Fatal("--build-context cannot be provided when --image is used as no build is performed.")
+		return fmt.Errorf("--build-context cannot be provided when --image is used as no build is performed")
 	}
 	if baseImage != "" && buildContext == "" {
-		logging.Fatal("A --build-context must be provided when --base-image is used for a Crane build.")
+		return fmt.Errorf("a --build-context must be provided when --base-image is used for a Crane build")
 	}
 
 	affinity := map[string]string{}
 	if cpuAffinityStr != "" {
 		affinity["cpu-affinity"] = cpuAffinityStr
+	}
+
+	vols, err := parseVolumeFlag(volumeStr)
+	if err != nil {
+		return fmt.Errorf("invalid volume configuration: %w", err)
 	}
 
 	jobDef := orchestrator.JobDefinition{
@@ -198,24 +203,25 @@ func runSubmitCmd(cmd *cobra.Command, args []string) {
 		PriorityClassName:       priorityClassName,
 		IsPathwaysJob:           isPathwaysJob,
 		Pathways:                pathways,
-		Volumes:                 parseVolumeFlag(volumeStr),
+		Volumes:                 vols,
 	}
 
 	if err := submitGKEJob(jobDef); err != nil {
-		logging.Fatal("failed to submit job to GKE cluster '%s' in location '%s': %v", clusterName, clusterLocation, err)
+		return fmt.Errorf("failed to submit job to GKE cluster '%s' in location '%s': %w", clusterName, clusterLocation, err)
 	}
 
 	if outputManifest == "" {
 		printPantheonLinks(jobDef)
 	}
+	return nil
 }
 
-func parseVolumeFlag(vStrs []string) []orchestrator.VolumeDefinition {
+func parseVolumeFlag(vStrs []string) ([]orchestrator.VolumeDefinition, error) {
 	var vols []orchestrator.VolumeDefinition
 	for i, vStr := range vStrs {
 		parts := strings.SplitN(vStr, ":", 2)
 		if len(parts) != 2 {
-			logging.Fatal("invalid volume format: %s. Expected format: <src>:<dest>", vStr)
+			return nil, fmt.Errorf("invalid volume format: %s. Expected format: <src>:<dest>", vStr)
 		}
 		src := parts[0]
 		dest := parts[1]
@@ -234,7 +240,7 @@ func parseVolumeFlag(vStrs []string) []orchestrator.VolumeDefinition {
 			Type:      volType,
 		})
 	}
-	return vols
+	return vols, nil
 }
 
 func submitGKEJob(jobDef orchestrator.JobDefinition) error {

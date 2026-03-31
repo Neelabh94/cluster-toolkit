@@ -16,12 +16,10 @@ package cluster
 
 import (
 	"fmt"
-	"os"
 	"text/tabwriter"
 
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
-	"hpc-toolkit/pkg/orchestrator/gke"
 
 	"github.com/spf13/cobra"
 )
@@ -29,16 +27,16 @@ import (
 var VolumeCmd = &cobra.Command{
 	Use:          "volume",
 	Short:        "Discovers and lists available storage options accessible to the user.",
-	Run:          runListVolumes,
+	RunE:         runListVolumes,
 	SilenceUsage: true,
 }
 
-func runListVolumes(cmd *cobra.Command, args []string) {
+func runListVolumes(cmd *cobra.Command, args []string) error {
 	logging.Info("Listing managed volumes...")
 
-	orc, err := gke.NewGKEOrchestrator()
+	orc, err := gkeOrchestratorFactory()
 	if err != nil {
-		logging.Fatal("Failed to create orchestrator: %v", err)
+		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
 	opts := orchestrator.ListOptions{
@@ -49,13 +47,14 @@ func runListVolumes(cmd *cobra.Command, args []string) {
 
 	volumes, err := orc.ListVolumes(opts)
 	if err != nil {
-		logging.Fatal("Failed to list volumes: %v", err)
+		return fmt.Errorf("failed to list volumes: %w", err)
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
 	fmt.Fprintln(w, "NAME\tTYPE\tMOUNT_PATH\tCLUSTER")
 	for _, v := range volumes {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", v.Name, v.Type, v.MountPath, v.Cluster)
 	}
 	w.Flush()
+	return nil
 }

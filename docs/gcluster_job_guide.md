@@ -191,6 +191,24 @@ By specifying the `--compute-type` flag, you can use the exact same command to d
     4. Build a container image from the job_details directory using python:3.9-slim as the base, and push it to Artifact Registry.
     5. Generate and apply an intelligently configured Kubernetes JobSet manifest to your cluster.
 
+* **Example for Multi-Slice GPU Job:**
+    If you want to run a job across multiple groups of GPU nodes (e.g., 2 groups of 4 nodes each), you can use `--num-slices` and `--num-nodes`:
+
+    ```bash
+    ./gcluster job submit \
+      --project <PROJECT_ID> \
+      --cluster <CLUSTER_NAME> \
+      --location <REGION/ZONE> \
+      --image us-docker.pkg.dev/my-project/my-repo/my-image:latest \
+      --command "python train.py" \
+      --name my-gpu-job \
+      --compute-type l4-1 \
+      --num-slices 2 \
+      --num-nodes 4
+    ```
+
+    *This creates a JobSet with 2 replicas, each having 4 pods, totaling 8 nodes.*
+
 ### 7.1 Example: Submit Job with Persistent Storage (Mounting Bucket)
 
 You can mount Cloud Storage buckets or host paths using the `--mount` flag. By default, mounts are read-only. You can specify read-write mode by appending `:rw` to the mount string:

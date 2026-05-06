@@ -287,7 +287,7 @@ func (g *GKEOrchestrator) resolveHardwareRequirements(job *orchestrator.JobDefin
 		job.Topology = topology
 
 		// 4. Calculate VMs per slice
-		err = g.dynamicallyCalculateVmsPerSlice(job)
+		err = g.dynamicallyCalculateNodesPerSlice(job)
 		if err != nil {
 			return JobProfile{}, false, err
 		}
@@ -348,9 +348,11 @@ func (g *GKEOrchestrator) resolveAmbiguousComputeShorthand(prefix string, candid
 	return "", fmt.Errorf("multiple matching machine types found in cluster for shorthand %q: %v. Please pass the required machine type directly to disambiguate.", prefix, matchedCandidates)
 }
 
-func (g *GKEOrchestrator) dynamicallyCalculateVmsPerSlice(job *orchestrator.JobDefinition) error {
+func (g *GKEOrchestrator) dynamicallyCalculateNodesPerSlice(job *orchestrator.JobDefinition) error {
 	if !config.IsTPU(job.MachineType) {
-		job.VmsPerSlice = 1 // default to 1 for non-TPU jobs
+		if job.NodesPerSlice <= 0 {
+			job.NodesPerSlice = 1 // default to 1 for non-TPU jobs if not provided
+		}
 		return nil
 	}
 	if job.Topology == "" {
@@ -366,11 +368,11 @@ func (g *GKEOrchestrator) dynamicallyCalculateVmsPerSlice(job *orchestrator.JobD
 	if err != nil {
 		return fmt.Errorf("failed to calculate nodes from topology: %w", err)
 	}
-	job.VmsPerSlice = nodes
-	if job.VmsPerSlice <= 0 {
-		return fmt.Errorf("invalid vms_per_slice (%d) for topology %s", job.VmsPerSlice, job.Topology)
+	job.NodesPerSlice = nodes
+	if job.NodesPerSlice <= 0 {
+		return fmt.Errorf("invalid nodes_per_slice (%d) for topology %s", job.NodesPerSlice, job.Topology)
 	}
-	logging.Info("Dynamically determined vms_per_slice for %s: %d", job.Topology, job.VmsPerSlice)
+	logging.Info("Dynamically determined nodes_per_slice for %s: %d", job.Topology, job.NodesPerSlice)
 	return nil
 }
 

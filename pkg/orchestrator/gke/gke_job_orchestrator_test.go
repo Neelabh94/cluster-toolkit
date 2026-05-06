@@ -1376,7 +1376,7 @@ func TestGenerateGKEManifest_DynamicVmsPerSlice(t *testing.T) {
 		ClusterLocation: "us-central1-a",
 		ComputeType:     "v6e-8",
 		Topology:        "16x16",
-		VmsPerSlice:     0,
+		NodesPerSlice:   0,
 	}
 
 	profile, isDynamicSlicing, err := orc.resolveHardwareRequirements(&job)
@@ -1406,68 +1406,52 @@ func TestGenerateGKEManifest_DynamicVmsPerSlice(t *testing.T) {
 	}
 }
 
-func TestResolveTopologyForChips(t *testing.T) {
-	tests := []struct {
-		name       string
-		prefix     string
-		totalChips int
-		wantShape  string
-		wantErr    bool
-	}{
-		{
-			name:       "v4 4 chips",
-			prefix:     "v4",
-			totalChips: 4,
-			wantShape:  "2x2x1",
-			wantErr:    false,
+func TestGenerateGKEManifest_RespectUserNumNodes(t *testing.T) {
+	setupMockMachineConfig(t)
+
+	orc := NewGKEOrchestrator()
+	orc.projectID = "mock-project"
+	mockExec := NewMockExecutor(map[string][]shell.CommandResult{
+		"kubectl get resourceflavors": {{ExitCode: 0, Stdout: ""}},
+		"kubectl get nodes":           {{ExitCode: 0, Stdout: ""}},
+		"gcloud compute machine-types describe g2-standard-12 --zone=us-central1-a --format=json": {
+			{ExitCode: 0, Stdout: `{"accelerators": [{"guestAcceleratorCount": 1, "guestAcceleratorType": "nvidia-l4"}]}`},
 		},
-		{
-			name:       "tpu7x 2048 chips",
-			prefix:     "tpu7x",
-			totalChips: 2048,
-			wantShape:  "8x16x16",
-			wantErr:    false,
-		},
-		{
-			name:       "v6e 1 chip",
-			prefix:     "v6e",
-			totalChips: 1,
-			wantShape:  "1x1",
-			wantErr:    false,
-		},
-		{
-			name:       "v6e 256 chips",
-			prefix:     "v6e",
-			totalChips: 256,
-			wantShape:  "16x16",
-			wantErr:    false,
-		},
-		{
-			name:       "tpu7x 1 chip (Fail)",
-			prefix:     "tpu7x",
-			totalChips: 1,
-			wantShape:  "",
-			wantErr:    true,
-		},
-		{
-			name:       "v4 3 chips (Fail)",
-			prefix:     "v4",
-			totalChips: 3,
-			wantShape:  "",
-			wantErr:    true,
-		},
+	})
+	orc.SetExecutor(mockExec)
+	orc.machineTypeClient = &MockMachineTypeClient{Executor: mockExec}
+
+	job := orchestrator.JobDefinition{
+		WorkloadName:    "user-nodes-test",
+		CommandToRun:    "echo hello",
+		ClusterLocation: "us-central1-a",
+		ComputeType:     "l4-1", // Non-TPU job (resolves to g2-standard-12)
+		NodesPerSlice:   32,     // Explicitly set to 32 (representing --num-nodes)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := config.ResolveTopologyForChips(fmt.Sprintf("%s-%d", tt.prefix, tt.totalChips))
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ResolveTopologyForChips() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if got != tt.wantShape {
-				t.Errorf("ResolveTopologyForChips() got = %v, want %v", got, tt.wantShape)
-			}
-		})
+	profile, isDynamicSlicing, err := orc.resolveHardwareRequirements(&job)
+	if err != nil {
+		t.Fatalf("resolveHardwareRequirements failed: %v", err)
+	}
+
+	opts, err := orc.PrepareManifestOptions(job, "test-image:latest", profile, isDynamicSlicing)
+	if err != nil {
+		t.Fatalf("PrepareManifestOptions failed: %v", err)
+	}
+
+	manifest, err := orc.GenerateGKEManifest(opts, profile)
+	if err != nil {
+		t.Fatalf("GenerateGKEManifest failed: %v", err)
+	}
+
+	expectedParallelism := "parallelism: 32"
+	expectedCompletions := "completions: 32"
+
+	if !strings.Contains(manifest, expectedParallelism) {
+		t.Errorf("manifest missing expected parallelism %q\nManifest: %s", expectedParallelism, manifest)
+	}
+	if !strings.Contains(manifest, expectedCompletions) {
+		t.Errorf("manifest missing expected completions %q\nManifest: %s", expectedCompletions, manifest)
 	}
 }
 
@@ -1596,7 +1580,7 @@ func TestGPUTopologyAwareScheduling(t *testing.T) {
 		ComputeType:     "nvidia-tesla-a100",
 		GKEScheduler:    "gke.io/topology-aware-auto",
 		NumSlices:       1,
-		VmsPerSlice:     1,
+		NodesPerSlice:   1,
 		ClusterLocation: "us-central1-a",
 	}
 

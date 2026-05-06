@@ -63,7 +63,7 @@ type JobDefinition struct {
 	WorkloadName                  string
 	KueueQueueName                string
 	NumSlices                     int
-	VmsPerSlice                   int
+	NodesPerSlice                 int
 	MaxRestarts                   int
 	TtlSecondsAfterFinished       int
 	TerminationGracePeriodSeconds int

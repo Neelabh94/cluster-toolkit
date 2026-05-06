@@ -139,7 +139,7 @@ type ManifestOptions struct {
 	ClusterLocation               string
 	KueueQueueName                string
 	NumSlices                     int
-	VmsPerSlice                   int
+	NodesPerSlice                 int
 	MaxRestarts                   int
 	TtlSecondsAfterFinished       int
 	TerminationGracePeriodSeconds int
@@ -254,7 +254,7 @@ type jobSetTemplateData struct {
 	TerminationGracePeriodSeconds int
 	MaxRestarts                   int
 	NumSlices                     int
-	VmsPerSlice                   int
+	NodesPerSlice                 int
 	WorkerBackoffLimit            int
 	PathwaysInstanceType          string
 	CommandToRun                  string

@@ -197,7 +197,7 @@ func runSubmitCmd(cmd *cobra.Command, args []string) error {
 		WorkloadName:                  workloadName,
 		KueueQueueName:                kueueQueueName,
 		NumSlices:                     numSlices,
-		VmsPerSlice:                   numNodes,
+		NodesPerSlice:                 numNodes,
 		MaxRestarts:                   restarts,
 		TtlSecondsAfterFinished:       ttlSeconds,
 		TerminationGracePeriodSeconds: gracePeriodSeconds,

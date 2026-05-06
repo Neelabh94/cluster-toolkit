@@ -180,7 +180,7 @@ func runSubmitCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	if config.IsTPU(computeType) && cmd.Flags().Changed("num-nodes") {
-		return fmt.Errorf("--num-nodes cannot be used with TPU jobs (vms-per-slice is calculated automatically from topology)")
+		return fmt.Errorf("--num-nodes cannot be used with TPU jobs (nodes-per-slice is calculated automatically from topology)")
 	}
 
 	jobDef := orchestrator.JobDefinition{

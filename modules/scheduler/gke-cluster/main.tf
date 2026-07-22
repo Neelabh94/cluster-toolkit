@@ -111,7 +111,8 @@ locals {
     var.release_channel != "UNSPECIFIED" ? local.latest_channel_version : local.latest_master_version
   )
 
-  mldiagnostics_minimum_version = "1.35.0-gke.3065000"
+  mldiagnostics_minimum_version            = "1.35.0-gke.3065000"
+  high_scale_checkpointing_minimum_version = "1.32.4-gke.1415000"
 }
 
 
@@ -125,6 +126,12 @@ module "mldiagnostics_version_check" {
   source          = "../../internal/semver_compare"
   current_version = local.master_version
   minimum_version = local.mldiagnostics_minimum_version
+}
+
+module "high_scale_checkpointing_version_check" {
+  source          = "../../internal/semver_compare"
+  current_version = local.master_version
+  minimum_version = local.high_scale_checkpointing_minimum_version
 }
 
 resource "google_container_cluster" "gke_cluster" {
@@ -326,6 +333,9 @@ resource "google_container_cluster" "gke_cluster" {
     }
     parallelstore_csi_driver_config {
       enabled = var.enable_parallelstore_csi
+    }
+    stateful_ha_config {
+      enabled = var.enable_multi_tier_checkpointing
     }
     ray_operator_config {
       enabled = var.enable_ray_operator
@@ -629,6 +639,35 @@ resource "kubernetes_namespace" "user_namespace" {
   ]
 }
 
+resource "kubernetes_manifest" "mtc_checkpoint_config" {
+  count = var.enable_multi_tier_checkpointing ? 1 : 0
+
+  manifest = {
+    "apiVersion" = "checkpointing.gke.io/v1"
+    "kind"       = "CheckpointConfiguration"
+    "metadata" = {
+      "name" = "mtc-config"
+    }
+    "spec" = {
+      "inMemoryVolumeSize"     = var.mtc_cache_size
+      "cloudStorageBucketName" = var.mtc_target_bucket
+      "nodeSelector"           = var.mtc_node_selector
+      "tolerations"            = var.mtc_tolerations
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.mtc_target_bucket != ""
+      error_message = "The 'mtc_target_bucket' variable must be set when 'enable_multi_tier_checkpointing' is enabled."
+    }
+  }
+
+  depends_on = [
+    google_container_cluster.gke_cluster,
+  ]
+}
+
 resource "kubernetes_labels" "workload_namespace_labels" {
   count       = var.enable_ml_diagnostics ? 1 : 0
   api_version = "v1"
@@ -725,6 +764,27 @@ resource "terraform_data" "validate_ml_diagnostics_version" {
     precondition {
       condition     = !var.enable_ml_diagnostics || module.mldiagnostics_version_check.is_greater_than_or_equal
       error_message = "GKE-managed ML Diagnostics requires a GKE version of ${local.mldiagnostics_minimum_version} or higher. Please update 'version_prefix' or 'min_master_version'."
+    }
+  }
+}
+
+resource "terraform_data" "validate_high_scale_checkpointing_version" {
+  lifecycle {
+    precondition {
+      condition     = !var.enable_multi_tier_checkpointing || module.high_scale_checkpointing_version_check.is_greater_than_or_equal
+      error_message = "High Scale Checkpointing is only supported in GKE version >= 1.32.4-gke.1415000."
+    }
+    precondition {
+      condition     = !var.enable_multi_tier_checkpointing || var.enable_gcsfuse_csi
+      error_message = "High Scale Checkpointing requires GCS Fuse CSI driver to be enabled."
+    }
+    precondition {
+      condition     = !var.enable_multi_tier_checkpointing || var.configure_workload_identity_sa
+      error_message = "High Scale Checkpointing requires Workload Identity Federation to be enabled."
+    }
+    precondition {
+      condition     = !var.enable_multi_tier_checkpointing || var.mtc_target_bucket != ""
+      error_message = "mtc_target_bucket must be specified when enable_multi_tier_checkpointing is true."
     }
   }
 }

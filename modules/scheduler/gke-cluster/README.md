@@ -110,8 +110,8 @@ limitations under the License.
 | Name | Version |
 | ---- | ------- |
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.12.2 |
-| <a name="requirement_google"></a> [google](#requirement\_google) | >= 7.20.0 |
-| <a name="requirement_google-beta"></a> [google-beta](#requirement\_google-beta) | >= 7.20.0 |
+| <a name="requirement_google"></a> [google](#requirement\_google) | >= 7.35.0 |
+| <a name="requirement_google-beta"></a> [google-beta](#requirement\_google-beta) | >= 7.35.0 |
 | <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | >= 2.36 |
 | <a name="requirement_time"></a> [time](#requirement\_time) | ~> 0.13 |
 
@@ -119,8 +119,8 @@ limitations under the License.
 
 | Name | Version |
 | ---- | ------- |
-| <a name="provider_google"></a> [google](#provider\_google) | >= 7.20.0 |
-| <a name="provider_google-beta"></a> [google-beta](#provider\_google-beta) | >= 7.20.0 |
+| <a name="provider_google"></a> [google](#provider\_google) | >= 7.35.0 |
+| <a name="provider_google-beta"></a> [google-beta](#provider\_google-beta) | >= 7.35.0 |
 | <a name="provider_kubernetes"></a> [kubernetes](#provider\_kubernetes) | >= 2.36 |
 | <a name="provider_terraform"></a> [terraform](#provider\_terraform) | n/a |
 | <a name="provider_time"></a> [time](#provider\_time) | ~> 0.13 |
@@ -129,6 +129,7 @@ limitations under the License.
 
 | Name | Source | Version |
 | ---- | ------ | ------- |
+| <a name="module_high_scale_checkpointing_version_check"></a> [high\_scale\_checkpointing\_version\_check](#module\_high\_scale\_checkpointing\_version\_check) | ../../internal/semver_compare | n/a |
 | <a name="module_kubectl_apply"></a> [kubectl\_apply](#module\_kubectl\_apply) | ../../management/kubectl-apply | n/a |
 | <a name="module_mldiagnostics_version_check"></a> [mldiagnostics\_version\_check](#module\_mldiagnostics\_version\_check) | ../../internal/semver_compare | n/a |
 | <a name="module_slice_controller_version_check"></a> [slice\_controller\_version\_check](#module\_slice\_controller\_version\_check) | ../../internal/semver_compare | n/a |
@@ -142,7 +143,9 @@ limitations under the License.
 | [google-beta_google_container_node_pool.cpu_np](https://registry.terraform.io/providers/hashicorp/google-beta/latest/docs/resources/google_container_node_pool) | resource |
 | [google-beta_google_container_node_pool.system_node_pools](https://registry.terraform.io/providers/hashicorp/google-beta/latest/docs/resources/google_container_node_pool) | resource |
 | [kubernetes_labels.workload_namespace_labels](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/labels) | resource |
+| [kubernetes_manifest.mtc_checkpoint_config](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/manifest) | resource |
 | [kubernetes_namespace.user_namespace](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/namespace) | resource |
+| [terraform_data.validate_high_scale_checkpointing_version](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) | resource |
 | [terraform_data.validate_ml_diagnostics_version](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) | resource |
 | [time_static.exclusion_start](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/static) | resource |
 | [google-beta_google_container_engine_versions.version_prefix_filter](https://registry.terraform.io/providers/hashicorp/google-beta/latest/docs/data-sources/google_container_engine_versions) | data source |
@@ -182,6 +185,7 @@ limitations under the License.
 | <a name="input_enable_master_global_access"></a> [enable\_master\_global\_access](#input\_enable\_master\_global\_access) | Whether the cluster master is accessible globally (from any region) or only within the same region as the private endpoint. | `bool` | `false` | no |
 | <a name="input_enable_ml_diagnostics"></a> [enable\_ml\_diagnostics](#input\_enable\_ml\_diagnostics) | Enables ML Diagnostics on the GKE cluster. | `bool` | `false` | no |
 | <a name="input_enable_multi_networking"></a> [enable\_multi\_networking](#input\_enable\_multi\_networking) | Enables [multi networking](https://cloud.google.com/kubernetes-engine/docs/how-to/setup-multinetwork-support-for-pods#create-a-gke-cluster) (Requires GKE Enterprise). This setting is immutable on clusters and enables [Dataplane V2](https://cloud.google.com/kubernetes-engine/docs/concepts/dataplane-v2?hl=en). If null, will determine state based on if additional\_networks are passed in. | `bool` | `null` | no |
+| <a name="input_enable_multi_tier_checkpointing"></a> [enable\_multi\_tier\_checkpointing](#input\_enable\_multi\_tier\_checkpointing) | The status of the High Scale Checkpointing addon (Multi-Tier Checkpointing). This feature allows GKE to manage local SSD checkpoints and background uploads to Cloud Storage for highly resilient machine learning workloads. | `bool` | `false` | no |
 | <a name="input_enable_node_local_dns_cache"></a> [enable\_node\_local\_dns\_cache](#input\_enable\_node\_local\_dns\_cache) | Enable GKE NodeLocal DNSCache addon to improve DNS lookup latency | `bool` | `false` | no |
 | <a name="input_enable_parallelstore_csi"></a> [enable\_parallelstore\_csi](#input\_enable\_parallelstore\_csi) | The status of the Google Compute Engine Parallelstore Container Storage Interface (CSI) driver addon, which allows the usage of a parallelstore as volumes. | `bool` | `false` | no |
 | <a name="input_enable_pathways_for_tpus"></a> [enable\_pathways\_for\_tpus](#input\_enable\_pathways\_for\_tpus) | If true, conditionally deploys a dedicated CPU node pool (cpu-np) using n4-standard-64 instances. | `bool` | `false` | no |
@@ -204,6 +208,10 @@ limitations under the License.
 | <a name="input_master_ipv4_cidr_block"></a> [master\_ipv4\_cidr\_block](#input\_master\_ipv4\_cidr\_block) | (Beta) The IP range in CIDR notation to use for the hosted master network. | `string` | `"172.16.0.32/28"` | no |
 | <a name="input_min_master_version"></a> [min\_master\_version](#input\_min\_master\_version) | The minimum version of the master. If unset, the cluster's version will be set by GKE to the version of the most recent official release. | `string` | `null` | no |
 | <a name="input_monitoring_components"></a> [monitoring\_components](#input\_monitoring\_components) | List of GKE monitoring components to enable. If empty, GKE monitoring is disabled. | `list(string)` | <pre>[<br/>  "SYSTEM_COMPONENTS",<br/>  "POD",<br/>  "DAEMONSET",<br/>  "DEPLOYMENT",<br/>  "STATEFULSET",<br/>  "STORAGE",<br/>  "HPA",<br/>  "CADVISOR",<br/>  "KUBELET",<br/>  "JOBSET"<br/>]</pre> | no |
+| <a name="input_mtc_cache_size"></a> [mtc\_cache\_size](#input\_mtc\_cache\_size) | Size of the MTC cache (e.g., '50Gi'). Used if mtc\_target\_bucket is provided. | `string` | `"50Gi"` | no |
+| <a name="input_mtc_node_selector"></a> [mtc\_node\_selector](#input\_mtc\_node\_selector) | Node selector for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes. | `map(string)` | `{}` | no |
+| <a name="input_mtc_target_bucket"></a> [mtc\_target\_bucket](#input\_mtc\_target\_bucket) | Target Cloud Storage bucket for Multi-Tier Checkpointing (Optionally deploy CheckpointConfiguration CRD via Terraform). | `string` | `""` | no |
+| <a name="input_mtc_tolerations"></a> [mtc\_tolerations](#input\_mtc\_tolerations) | Tolerations for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes. | `list(map(string))` | `[]` | no |
 | <a name="input_name_suffix"></a> [name\_suffix](#input\_name\_suffix) | Custom cluster name postpended to the `deployment_name`. See `prefix_with_deployment_name`. | `string` | `""` | no |
 | <a name="input_namespace"></a> [namespace](#input\_namespace) | Kubernetes service account namespace to use with the gke cluster | `string` | `"default"` | no |
 | <a name="input_network_id"></a> [network\_id](#input\_network\_id) | The ID of the GCE VPC network to host the cluster given in the format: `projects/<project_id>/global/networks/<network_name>`. | `string` | n/a | yes |

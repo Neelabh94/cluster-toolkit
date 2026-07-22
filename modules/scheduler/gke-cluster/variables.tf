@@ -200,12 +200,42 @@ variable "enable_gcsfuse_csi" {
   default     = false
 }
 
-
 variable "enable_persistent_disk_csi" {
   description = "The status of the Google Compute Engine Persistent Disk Container Storage Interface (CSI) driver addon, which allows the usage of a PD as volumes."
   type        = bool
   default     = true
 }
+
+variable "enable_multi_tier_checkpointing" {
+  description = "The status of the High Scale Checkpointing addon (Multi-Tier Checkpointing). This feature allows GKE to manage local SSD checkpoints and background uploads to Cloud Storage for highly resilient machine learning workloads."
+  type        = bool
+  default     = false
+}
+
+variable "mtc_target_bucket" {
+  description = "Target Cloud Storage bucket for Multi-Tier Checkpointing (Optionally deploy CheckpointConfiguration CRD via Terraform)."
+  type        = string
+  default     = ""
+}
+
+variable "mtc_cache_size" {
+  description = "Size of the MTC cache (e.g., '50Gi'). Used if mtc_target_bucket is provided."
+  type        = string
+  default     = "50Gi"
+}
+
+variable "mtc_node_selector" {
+  description = "Node selector for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes."
+  type        = map(string)
+  default     = {}
+}
+
+variable "mtc_tolerations" {
+  description = "Tolerations for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes."
+  type        = list(map(string))
+  default     = []
+}
+
 
 variable "enable_parallelstore_csi" {
   description = "The status of the Google Compute Engine Parallelstore Container Storage Interface (CSI) driver addon, which allows the usage of a parallelstore as volumes."
@@ -248,10 +278,6 @@ variable "monitoring_components" {
     "JOBSET"
   ]
 }
-
-
-
-
 
 variable "enable_node_local_dns_cache" {
   description = "Enable GKE NodeLocal DNSCache addon to improve DNS lookup latency"

@@ -79,7 +79,7 @@ var (
 	pathwaysWorkerEnv []string
 	validEnvKeyRegex  = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
 
-	gcsfuseMountOptions string
+	mountOptions      string
 )
 
 var SubmitCmd = &cobra.Command{
@@ -125,6 +125,14 @@ and JobSet/Kueue specific configurations like workload name, queue, nodes, and r
 
 		priorityClassName = strings.ToLower(priorityClassName)
 
+		if mountOptions != "" {
+			for _, m := range volumeStr {
+				if !strings.HasPrefix(m, "gs://") {
+					return fmt.Errorf("--mount-options is currently only supported for GCS fuse volumes (gs://...)")
+				}
+			}
+		}
+
 		return nil
 	},
 	SilenceUsage: true,
@@ -140,6 +148,7 @@ func init() {
 	SubmitCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-image.")
 
 	SubmitCmd.Flags().StringSliceVar(&volumeStr, "mount", nil, "Volumes to mount (format: <src>:<dest>[:<mode>], mode can be 'ro' or 'rw', default 'ro').")
+	SubmitCmd.Flags().StringVar(&mountOptions, "mount-options", "", "Mount options for all volumes (currently only supported for GCS fuse volumes, e.g., 'logging:severity:info,enable-atomic-rename-object:true').")
 	SubmitCmd.Flags().StringArrayVar(&envVars, "env", []string{}, "Custom environment variables to pass to the workload container in KEY=VALUE format. Can be specified multiple times.")
 
 	SubmitCmd.Flags().StringVarP(&workloadName, "name", "n", "", "Name of the workload to create. Required.")
@@ -165,7 +174,6 @@ func init() {
 	SubmitCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose logging for the workload (TPUs and GPUs).")
 	SubmitCmd.Flags().StringVar(&gkeNapProvisioning, "gke-nap-provisioning", "", "Compute provisioning model for GKE NAP. Allowed values: on-demand, spot, reservation.")
 	SubmitCmd.Flags().StringVar(&gkeNapReservation, "gke-nap-reservation", "", "Name of the Google Cloud Reservation for GKE NAP (required if --gke-nap-provisioning=reservation).")
-	SubmitCmd.Flags().StringVar(&gcsfuseMountOptions, "gcsfuse-mount-options", "", "GCSFuse mount options for all GCS mounts (e.g., 'logging:severity:info,enable-atomic-rename-object:true').")
 
 	SubmitCmd.Flags().BoolVar(&isPathwaysJob, "pathways", false, "If present, gcluster will generate a manifest for a Pathways job.")
 	SubmitCmd.Flags().StringVar(&pathways.ProxyServerImage, "pathways-proxy-server-image", "", "The image for the Pathways proxy server.")
@@ -261,7 +269,7 @@ func runSubmitCmd(cmd *cobra.Command, args []string) error {
 		IsPathwaysJob:                 isPathwaysJob,
 		Pathways:                      pathways,
 		RawMounts:                     volumeStr,
-		GCSFuseMountOptions:           gcsfuseMountOptions,
+		MountOptions:                  mountOptions,
 		Env:                           parseEnvFlags(envVars),
 		Verbose:                       verbose,
 	}

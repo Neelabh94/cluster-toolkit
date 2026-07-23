@@ -99,7 +99,7 @@ type JobDefinition struct {
 	Pathways      PathwaysJobDefinition // Embedded struct for Pathways-specific args
 
 	RawMounts           []string
-	GCSFuseMountOptions string
+	MountOptions string
 	Env                 map[string]string
 
 	Verbose bool

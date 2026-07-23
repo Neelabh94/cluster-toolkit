@@ -125,12 +125,8 @@ and JobSet/Kueue specific configurations like workload name, queue, nodes, and r
 
 		priorityClassName = strings.ToLower(priorityClassName)
 
-		if mountOptions != "" {
-			for _, m := range volumeStr {
-				if !strings.HasPrefix(m, "gs://") {
-					return fmt.Errorf("--mount-options is currently only supported for GCS fuse volumes (gs://...)")
-				}
-			}
+		if err := validateMountOptions(); err != nil {
+			return err
 		}
 
 		return nil
@@ -386,6 +382,17 @@ func validateGKENAPFlags() error {
 	}
 	if gkeNapProvisioning != "reservation" && gkeNapReservation != "" {
 		return fmt.Errorf("--gke-nap-reservation should only be provided when --gke-nap-provisioning=reservation")
+	}
+	return nil
+}
+
+func validateMountOptions() error {
+	if mountOptions != "" {
+		for _, m := range volumeStr {
+			if !strings.HasPrefix(m, "gs://") {
+				return fmt.Errorf("--mount-options is currently only supported for GCS fuse volumes (gs://...)")
+			}
+		}
 	}
 	return nil
 }

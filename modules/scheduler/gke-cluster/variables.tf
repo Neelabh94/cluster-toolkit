@@ -224,18 +224,6 @@ variable "mtc_cache_size" {
   default     = "50Gi"
 }
 
-variable "mtc_node_selector" {
-  description = "Node selector for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes."
-  type        = map(string)
-  default     = {}
-}
-
-variable "mtc_tolerations" {
-  description = "Tolerations for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes."
-  type        = list(map(string))
-  default     = []
-}
-
 
 variable "enable_parallelstore_csi" {
   description = "The status of the Google Compute Engine Parallelstore Container Storage Interface (CSI) driver addon, which allows the usage of a parallelstore as volumes."

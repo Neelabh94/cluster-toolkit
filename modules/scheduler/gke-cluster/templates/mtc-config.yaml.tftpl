@@ -1,15 +1,7 @@
 apiVersion: checkpointing.gke.io/v1
 kind: CheckpointConfiguration
 metadata:
-  name: mtc-config
+  name: default
 spec:
   inMemoryVolumeSize: ${inMemoryVolumeSize}
   cloudStorageBucketName: ${cloudStorageBucketName}
-%{ if length(nodeSelector) > 2 ~}
-  nodeSelector:
-    ${indent(4, chomp(yamlencode(jsondecode(nodeSelector))))}
-%{ endif ~}
-%{ if length(tolerations) > 2 ~}
-  tolerations:
-    ${indent(4, chomp(yamlencode(jsondecode(tolerations))))}
-%{ endif ~}

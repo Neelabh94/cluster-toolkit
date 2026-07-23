@@ -723,6 +723,16 @@ module "kubectl_apply" {
         source        = "https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.0.0/manifests.yaml",
         template_vars = {}
       }
+    ] : [],
+    var.enable_multi_tier_checkpointing ? [
+      {
+        source = "${path.module}/templates/mtc-config.yaml.tftpl",
+        template_vars = {
+          inMemoryVolumeSize     = var.mtc_cache_size,
+          cloudStorageBucketName = var.mtc_target_bucket,
+          _dummy_dependency      = length(null_resource.enable_high_scale_checkpointing) > 0 ? null_resource.enable_high_scale_checkpointing[0].id : ""
+        }
+      }
     ] : []
   )
 }
@@ -750,6 +760,10 @@ resource "terraform_data" "validate_high_scale_checkpointing_version" {
       condition     = !var.enable_multi_tier_checkpointing || var.configure_workload_identity_sa
       error_message = "High Scale Checkpointing requires Workload Identity Federation to be enabled."
     }
+    precondition {
+      condition     = !var.enable_multi_tier_checkpointing || var.mtc_target_bucket != ""
+      error_message = "High Scale Checkpointing requires an MTC Target Bucket (var.mtc_target_bucket)."
+    }
   }
 }
 
@@ -760,48 +774,52 @@ resource "null_resource" "enable_high_scale_checkpointing" {
 
   triggers = {
     cluster_id = google_container_cluster.gke_cluster.id
-    mtc_bucket = var.mtc_target_bucket
   }
 
   provisioner "local-exec" {
     command = <<EOT
-      for i in {1..20}; do
-        if gcloud container clusters update ${google_container_cluster.gke_cluster.name} --update-addons=HighScaleCheckpointing=ENABLED --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}; then
-          echo "Successfully enabled HighScaleCheckpointing addon."
-          break
+      ADDON_ENABLED=$(gcloud container clusters describe "${google_container_cluster.gke_cluster.name}" --location "${google_container_cluster.gke_cluster.location}" --project "${var.project_id}" --format="value(addonsConfig.highScaleCheckpointingConfig.enabled)" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")
+      if [ "$ADDON_ENABLED" = "true" ]; then
+        echo "HighScaleCheckpointing addon is already enabled."
+      else
+        echo "Enabling HighScaleCheckpointing addon..."
+        success=false
+        for i in {1..20}; do
+          if gcloud container clusters update "${google_container_cluster.gke_cluster.name}" --update-addons=HighScaleCheckpointing=ENABLED --location "${google_container_cluster.gke_cluster.location}" --project "${var.project_id}"; then
+            echo "Successfully enabled HighScaleCheckpointing addon."
+            success=true
+            break
+          fi
+          echo "Cluster is locked or updating, waiting 30 seconds before retrying..."
+          sleep 30
+        done
+        if [ "$success" = false ]; then
+          echo "Failed to enable HighScaleCheckpointing addon after 20 retries."
+          exit 1
         fi
-        echo "Cluster is locked or updating, waiting 30 seconds before retrying..."
-        sleep 30
-      done
+      fi
       
-      %{if var.mtc_target_bucket != ""}
       echo "Getting credentials..."
-      gcloud container clusters get-credentials ${google_container_cluster.gke_cluster.name} --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}
+      gcloud container clusters get-credentials "${google_container_cluster.gke_cluster.name}" --location "${google_container_cluster.gke_cluster.location}" --project "${var.project_id}"
 
       echo "Waiting for CheckpointConfiguration CRD to become available..."
+      CRD_READY=false
       for i in {1..20}; do
         if kubectl get crd checkpointconfigurations.checkpointing.gke.io >/dev/null 2>&1; then
           echo "CheckpointConfiguration CRD is ready."
+          CRD_READY=true
           break
         fi
         sleep 15
       done
-      
-      echo "Applying CheckpointConfiguration..."
-      cat << 'EOF' | kubectl apply -f -
-${templatefile("${path.module}/templates/mtc-config.yaml.tftpl", {
-    inMemoryVolumeSize     = var.mtc_cache_size,
-    cloudStorageBucketName = var.mtc_target_bucket,
-    nodeSelector           = jsonencode(var.mtc_node_selector),
-    tolerations            = jsonencode(var.mtc_tolerations)
-})}
-EOF
-      echo "Successfully applied CheckpointConfiguration."
-      %{endif}
+      if [ "$CRD_READY" = false ]; then
+        echo "CheckpointConfiguration CRD did not become available in time."
+        exit 1
+      fi
     EOT
-}
+  }
 
-depends_on = [
-  google_container_cluster.gke_cluster
-]
+  depends_on = [
+    google_container_cluster.gke_cluster
+  ]
 }

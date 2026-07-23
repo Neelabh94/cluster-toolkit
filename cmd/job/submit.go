@@ -375,7 +375,6 @@ func validateGKENAPFlags() error {
 	if gkeNapProvisioning != "reservation" && gkeNapReservation != "" {
 		return fmt.Errorf("--gke-nap-reservation should only be provided when --gke-nap-provisioning=reservation")
 	}
-
 	return nil
 }
 

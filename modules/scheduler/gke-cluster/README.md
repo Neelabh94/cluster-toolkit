@@ -113,8 +113,8 @@ limitations under the License.
 | <a name="requirement_google"></a> [google](#requirement\_google) | >= 7.20.0 |
 | <a name="requirement_google-beta"></a> [google-beta](#requirement\_google-beta) | >= 7.20.0 |
 | <a name="requirement_kubernetes"></a> [kubernetes](#requirement\_kubernetes) | >= 2.36 |
-| <a name="requirement_null"></a> [null](#requirement\_null) | ~> 3.2.1 |
-| <a name="requirement_time"></a> [time](#requirement\_time) | ~> 0.9.1 |
+| <a name="requirement_null"></a> [null](#requirement\_null) | ~> 3.0 |
+| <a name="requirement_time"></a> [time](#requirement\_time) | ~> 0.13 |
 
 ## Providers
 
@@ -123,9 +123,9 @@ limitations under the License.
 | <a name="provider_google"></a> [google](#provider\_google) | >= 7.20.0 |
 | <a name="provider_google-beta"></a> [google-beta](#provider\_google-beta) | >= 7.20.0 |
 | <a name="provider_kubernetes"></a> [kubernetes](#provider\_kubernetes) | >= 2.36 |
-| <a name="provider_null"></a> [null](#provider\_null) | ~> 3.2.1 |
+| <a name="provider_null"></a> [null](#provider\_null) | ~> 3.0 |
 | <a name="provider_terraform"></a> [terraform](#provider\_terraform) | n/a |
-| <a name="provider_time"></a> [time](#provider\_time) | ~> 0.9.1 |
+| <a name="provider_time"></a> [time](#provider\_time) | ~> 0.13 |
 
 ## Modules
 
@@ -211,9 +211,7 @@ limitations under the License.
 | <a name="input_min_master_version"></a> [min\_master\_version](#input\_min\_master\_version) | The minimum version of the master. If unset, the cluster's version will be set by GKE to the version of the most recent official release. | `string` | `null` | no |
 | <a name="input_monitoring_components"></a> [monitoring\_components](#input\_monitoring\_components) | List of GKE monitoring components to enable. If empty, GKE monitoring is disabled. | `list(string)` | <pre>[<br/>  "SYSTEM_COMPONENTS",<br/>  "POD",<br/>  "DAEMONSET",<br/>  "DEPLOYMENT",<br/>  "STATEFULSET",<br/>  "STORAGE",<br/>  "HPA",<br/>  "CADVISOR",<br/>  "KUBELET",<br/>  "JOBSET"<br/>]</pre> | no |
 | <a name="input_mtc_cache_size"></a> [mtc\_cache\_size](#input\_mtc\_cache\_size) | Size of the MTC cache (e.g., '50Gi'). Used if mtc\_target\_bucket is provided. | `string` | `"50Gi"` | no |
-| <a name="input_mtc_node_selector"></a> [mtc\_node\_selector](#input\_mtc\_node\_selector) | Node selector for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes. | `map(string)` | `{}` | no |
 | <a name="input_mtc_target_bucket"></a> [mtc\_target\_bucket](#input\_mtc\_target\_bucket) | Target Cloud Storage bucket for Multi-Tier Checkpointing (Optionally deploy CheckpointConfiguration CRD via Terraform). | `string` | `""` | no |
-| <a name="input_mtc_tolerations"></a> [mtc\_tolerations](#input\_mtc\_tolerations) | Tolerations for the MTC CheckpointConfiguration CRD to ensure the CSI driver is scheduled on correct nodes. | `list(map(string))` | `[]` | no |
 | <a name="input_name_suffix"></a> [name\_suffix](#input\_name\_suffix) | Custom cluster name postpended to the `deployment_name`. See `prefix_with_deployment_name`. | `string` | `""` | no |
 | <a name="input_namespace"></a> [namespace](#input\_namespace) | Kubernetes service account namespace to use with the gke cluster | `string` | `"default"` | no |
 | <a name="input_network_id"></a> [network\_id](#input\_network\_id) | The ID of the GCE VPC network to host the cluster given in the format: `projects/<project_id>/global/networks/<network_name>`. | `string` | n/a | yes |

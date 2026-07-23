@@ -771,8 +771,8 @@ resource "null_resource" "enable_high_scale_checkpointing" {
   provisioner "local-exec" {
     command = <<EOT
       for i in {1..20}; do
-        if gcloud container clusters update ${google_container_cluster.gke_cluster.name} --update-addons=StatefulHA=ENABLED --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}; then
-          echo "Successfully enabled StatefulHA addon."
+        if gcloud container clusters update ${google_container_cluster.gke_cluster.name} --update-addons=HighScaleCheckpointing=ENABLED --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}; then
+          echo "Successfully enabled HighScaleCheckpointing addon."
           break
         fi
         echo "Cluster is locked or updating, waiting 30 seconds before retrying..."

@@ -7,9 +7,9 @@ spec:
   cloudStorageBucketName: ${cloudStorageBucketName}
 %{ if length(nodeSelector) > 2 ~}
   nodeSelector:
-${indent(4, yamlencode(jsondecode(nodeSelector)))}
+    ${indent(4, chomp(yamlencode(jsondecode(nodeSelector))))}
 %{ endif ~}
 %{ if length(tolerations) > 2 ~}
   tolerations:
-${indent(4, yamlencode(jsondecode(tolerations)))}
+    ${indent(4, chomp(yamlencode(jsondecode(tolerations))))}
 %{ endif ~}

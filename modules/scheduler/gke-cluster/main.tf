@@ -760,6 +760,7 @@ resource "null_resource" "enable_high_scale_checkpointing" {
 
   triggers = {
     cluster_id = google_container_cluster.gke_cluster.id
+    mtc_bucket = var.mtc_target_bucket
   }
 
   provisioner "local-exec" {

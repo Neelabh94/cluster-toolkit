@@ -334,9 +334,7 @@ resource "google_container_cluster" "gke_cluster" {
     parallelstore_csi_driver_config {
       enabled = var.enable_parallelstore_csi
     }
-    stateful_ha_config {
-      enabled = var.enable_multi_tier_checkpointing
-    }
+    # stateful_ha_config removed here as it does not relate to MTC
     ray_operator_config {
       enabled = var.enable_ray_operator
     }
@@ -639,34 +637,6 @@ resource "kubernetes_namespace" "user_namespace" {
   ]
 }
 
-resource "kubernetes_manifest" "mtc_checkpoint_config" {
-  count = var.enable_multi_tier_checkpointing ? 1 : 0
-
-  manifest = {
-    "apiVersion" = "checkpointing.gke.io/v1"
-    "kind"       = "CheckpointConfiguration"
-    "metadata" = {
-      "name" = "mtc-config"
-    }
-    "spec" = {
-      "inMemoryVolumeSize"     = var.mtc_cache_size
-      "cloudStorageBucketName" = var.mtc_target_bucket
-      "nodeSelector"           = var.mtc_node_selector
-      "tolerations"            = var.mtc_tolerations
-    }
-  }
-
-  lifecycle {
-    precondition {
-      condition     = var.mtc_target_bucket != ""
-      error_message = "The 'mtc_target_bucket' variable must be set when 'enable_multi_tier_checkpointing' is enabled."
-    }
-  }
-
-  depends_on = [
-    google_container_cluster.gke_cluster,
-  ]
-}
 
 resource "kubernetes_labels" "workload_namespace_labels" {
   count       = var.enable_ml_diagnostics ? 1 : 0
@@ -787,4 +757,53 @@ resource "terraform_data" "validate_high_scale_checkpointing_version" {
       error_message = "mtc_target_bucket must be specified when enable_multi_tier_checkpointing is true."
     }
   }
+}
+
+# The High-Scale Checkpointing add-on is currently not supported by the Google Terraform Provider (v6.50.0).
+# We must use a local-exec provisioner to enable the add-on via gcloud if var.enable_multi_tier_checkpointing is true.
+resource "null_resource" "enable_high_scale_checkpointing" {
+  count = var.enable_multi_tier_checkpointing ? 1 : 0
+
+  triggers = {
+    cluster_id = google_container_cluster.gke_cluster.id
+  }
+
+  provisioner "local-exec" {
+    command = <<EOT
+      for i in {1..20}; do
+        if gcloud container clusters update ${google_container_cluster.gke_cluster.name} --update-addons=StatefulHA=ENABLED --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}; then
+          echo "Successfully enabled StatefulHA addon."
+          break
+        fi
+        echo "Cluster is locked or updating, waiting 30 seconds before retrying..."
+        sleep 30
+      done
+      
+      echo "Waiting for CheckpointConfiguration CRD to become available..."
+      for i in {1..20}; do
+        if kubectl get crd checkpointconfigurations.checkpointing.gke.io >/dev/null 2>&1; then
+          echo "CheckpointConfiguration CRD is ready."
+          break
+        fi
+        sleep 15
+      done
+      
+      echo "Getting credentials and applying CheckpointConfiguration..."
+      gcloud container clusters get-credentials ${google_container_cluster.gke_cluster.name} --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}
+      
+      cat << 'EOF' | kubectl apply -f -
+${templatefile("${path.module}/templates/mtc-config.yaml.tftpl", {
+    inMemoryVolumeSize     = var.mtc_cache_size,
+    cloudStorageBucketName = var.mtc_target_bucket,
+    nodeSelector           = jsonencode(var.mtc_node_selector),
+    tolerations            = jsonencode(var.mtc_tolerations)
+})}
+EOF
+      echo "Successfully applied CheckpointConfiguration."
+    EOT
+}
+
+depends_on = [
+  google_container_cluster.gke_cluster
+]
 }

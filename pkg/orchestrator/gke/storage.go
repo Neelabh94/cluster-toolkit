@@ -65,13 +65,17 @@ func (sm *StorageManager) ProcessMounts(mounts []string, job orchestrator.JobDef
 			volType = "hostPath"
 		}
 
-		mountInfos = append(mountInfos, MountInfo{
+		mountInfo := MountInfo{
 			Name:      fmt.Sprintf("vol-%d", i),
 			Source:    src,
 			MountPath: dest,
 			Type:      volType,
 			ReadOnly:  readOnly,
-		})
+		}
+		if volType == "gcsfuse" {
+			mountInfo.Options = job.GCSFuseMountOptions
+		}
+		mountInfos = append(mountInfos, mountInfo)
 	}
 
 	return mountInfos, additionalManifests, nil
@@ -332,12 +336,16 @@ func buildVolumeSpec(v MountInfo) map[string]interface{} {
 	}
 	switch v.Type {
 	case "gcsfuse":
+		volumeAttributes := map[string]interface{}{
+			"bucketName": strings.TrimPrefix(v.Source, "gs://"),
+		}
+		if v.Options != "" {
+			volumeAttributes["mountOptions"] = v.Options
+		}
 		spec["csi"] = map[string]interface{}{
-			"driver":   "gcsfuse.csi.storage.gke.io",
-			"readOnly": v.ReadOnly,
-			"volumeAttributes": map[string]interface{}{
-				"bucketName": strings.TrimPrefix(v.Source, "gs://"),
-			},
+			"driver":           "gcsfuse.csi.storage.gke.io",
+			"readOnly":         v.ReadOnly,
+			"volumeAttributes": volumeAttributes,
 		}
 	case "hostPath":
 		spec["hostPath"] = map[string]interface{}{

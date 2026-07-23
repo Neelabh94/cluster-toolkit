@@ -78,6 +78,8 @@ var (
 	pathwaysServerEnv []string
 	pathwaysWorkerEnv []string
 	validEnvKeyRegex  = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+	gcsfuseMountOptions string
 )
 
 var SubmitCmd = &cobra.Command{
@@ -163,6 +165,7 @@ func init() {
 	SubmitCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose logging for the workload (TPUs and GPUs).")
 	SubmitCmd.Flags().StringVar(&gkeNapProvisioning, "gke-nap-provisioning", "", "Compute provisioning model for GKE NAP. Allowed values: on-demand, spot, reservation.")
 	SubmitCmd.Flags().StringVar(&gkeNapReservation, "gke-nap-reservation", "", "Name of the Google Cloud Reservation for GKE NAP (required if --gke-nap-provisioning=reservation).")
+	SubmitCmd.Flags().StringVar(&gcsfuseMountOptions, "gcsfuse-mount-options", "", "GCSFuse mount options for all GCS mounts (e.g., 'logging:severity:info,enable-atomic-rename-object:true').")
 
 	SubmitCmd.Flags().BoolVar(&isPathwaysJob, "pathways", false, "If present, gcluster will generate a manifest for a Pathways job.")
 	SubmitCmd.Flags().StringVar(&pathways.ProxyServerImage, "pathways-proxy-server-image", "", "The image for the Pathways proxy server.")
@@ -258,6 +261,7 @@ func runSubmitCmd(cmd *cobra.Command, args []string) error {
 		IsPathwaysJob:                 isPathwaysJob,
 		Pathways:                      pathways,
 		RawMounts:                     volumeStr,
+		GCSFuseMountOptions:           gcsfuseMountOptions,
 		Env:                           parseEnvFlags(envVars),
 		Verbose:                       verbose,
 	}

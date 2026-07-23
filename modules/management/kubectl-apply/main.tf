@@ -128,8 +128,8 @@ locals {
         # Step B: Process directory files
         contains(keys(local.directory_manifests), index) ? (
           join("\n---\n", [
-            # Use setunion() to combine the results of fileset (which are sets)
-            for f in setunion(
+            # Use union() to combine the results of fileset (which are sets)
+            for f in union(
               fileset(manifest.source, "*.yaml"),
               fileset(manifest.source, "*.yml"),
               fileset(manifest.source, "*.tftpl")

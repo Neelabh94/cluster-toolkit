@@ -334,7 +334,6 @@ resource "google_container_cluster" "gke_cluster" {
     parallelstore_csi_driver_config {
       enabled = var.enable_parallelstore_csi
     }
-    # stateful_ha_config removed here as it does not relate to MTC
     ray_operator_config {
       enabled = var.enable_ray_operator
     }
@@ -637,7 +636,6 @@ resource "kubernetes_namespace" "user_namespace" {
   ]
 }
 
-
 resource "kubernetes_labels" "workload_namespace_labels" {
   count       = var.enable_ml_diagnostics ? 1 : 0
   api_version = "v1"
@@ -752,10 +750,6 @@ resource "terraform_data" "validate_high_scale_checkpointing_version" {
       condition     = !var.enable_multi_tier_checkpointing || var.configure_workload_identity_sa
       error_message = "High Scale Checkpointing requires Workload Identity Federation to be enabled."
     }
-    precondition {
-      condition     = !var.enable_multi_tier_checkpointing || var.mtc_target_bucket != ""
-      error_message = "mtc_target_bucket must be specified when enable_multi_tier_checkpointing is true."
-    }
   }
 }
 
@@ -779,6 +773,10 @@ resource "null_resource" "enable_high_scale_checkpointing" {
         sleep 30
       done
       
+      %{if var.mtc_target_bucket != ""}
+      echo "Getting credentials..."
+      gcloud container clusters get-credentials ${google_container_cluster.gke_cluster.name} --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}
+
       echo "Waiting for CheckpointConfiguration CRD to become available..."
       for i in {1..20}; do
         if kubectl get crd checkpointconfigurations.checkpointing.gke.io >/dev/null 2>&1; then
@@ -788,9 +786,7 @@ resource "null_resource" "enable_high_scale_checkpointing" {
         sleep 15
       done
       
-      echo "Getting credentials and applying CheckpointConfiguration..."
-      gcloud container clusters get-credentials ${google_container_cluster.gke_cluster.name} --location ${google_container_cluster.gke_cluster.location} --project ${var.project_id}
-      
+      echo "Applying CheckpointConfiguration..."
       cat << 'EOF' | kubectl apply -f -
 ${templatefile("${path.module}/templates/mtc-config.yaml.tftpl", {
     inMemoryVolumeSize     = var.mtc_cache_size,
@@ -800,6 +796,7 @@ ${templatefile("${path.module}/templates/mtc-config.yaml.tftpl", {
 })}
 EOF
       echo "Successfully applied CheckpointConfiguration."
+      %{endif}
     EOT
 }
 

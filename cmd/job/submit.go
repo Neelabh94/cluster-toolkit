@@ -79,7 +79,7 @@ var (
 	pathwaysWorkerEnv []string
 	validEnvKeyRegex  = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
 
-	mountOptions      string
+	mountOptions string
 )
 
 var SubmitCmd = &cobra.Command{

@@ -78,8 +78,6 @@ var (
 	pathwaysServerEnv []string
 	pathwaysWorkerEnv []string
 	validEnvKeyRegex  = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
-
-	mountOptions string
 )
 
 var SubmitCmd = &cobra.Command{
@@ -125,10 +123,6 @@ and JobSet/Kueue specific configurations like workload name, queue, nodes, and r
 
 		priorityClassName = strings.ToLower(priorityClassName)
 
-		if err := validateMountOptions(); err != nil {
-			return err
-		}
-
 		return nil
 	},
 	SilenceUsage: true,
@@ -143,8 +137,8 @@ func init() {
 	SubmitCmd.Flags().StringVarP(&dryRunManifest, "dry-run-out", "o", "", "Path to output the generated Kubernetes manifest instead of applying it.")
 	SubmitCmd.Flags().StringVarP(&platform, "platform", "f", "linux/amd64", "Target platform for the image build (e.g., 'linux/amd64', 'linux/arm64'). Used with --base-image.")
 
-	SubmitCmd.Flags().StringSliceVar(&volumeStr, "mount", nil, "Volumes to mount (format: <src>:<dest>[:<mode>], mode can be 'ro' or 'rw', default 'ro').")
-	SubmitCmd.Flags().StringVar(&mountOptions, "mount-options", "", "Mount options for all volumes (currently only supported for GCS fuse volumes, e.g., 'logging:severity:info,enable-atomic-rename-object:true').")
+	SubmitCmd.Flags().StringSliceVar(&volumeStr, "mount", nil, "Volumes to mount (format: <src>;<dest>[;<mode>][;options=<options>], mode can be 'ro' or 'rw', default 'ro').")
+
 	SubmitCmd.Flags().StringArrayVar(&envVars, "env", []string{}, "Custom environment variables to pass to the workload container in KEY=VALUE format. Can be specified multiple times.")
 
 	SubmitCmd.Flags().StringVarP(&workloadName, "name", "n", "", "Name of the workload to create. Required.")
@@ -265,9 +259,9 @@ func runSubmitCmd(cmd *cobra.Command, args []string) error {
 		IsPathwaysJob:                 isPathwaysJob,
 		Pathways:                      pathways,
 		RawMounts:                     volumeStr,
-		MountOptions:                  mountOptions,
-		Env:                           parseEnvFlags(envVars),
-		Verbose:                       verbose,
+
+		Env:     parseEnvFlags(envVars),
+		Verbose: verbose,
 	}
 
 	return orc.SubmitJob(jobDef)
@@ -382,22 +376,6 @@ func validateGKENAPFlags() error {
 	}
 	if gkeNapProvisioning != "reservation" && gkeNapReservation != "" {
 		return fmt.Errorf("--gke-nap-reservation should only be provided when --gke-nap-provisioning=reservation")
-	}
-	return nil
-}
-
-func validateMountOptions() error {
-	if mountOptions != "" {
-		hasGCS := false
-		for _, m := range volumeStr {
-			if strings.HasPrefix(m, "gs://") {
-				hasGCS = true
-				break
-			}
-		}
-		if !hasGCS {
-			return fmt.Errorf("--mount-options requires at least one GCS mount (gs://...)")
-		}
 	}
 	return nil
 }

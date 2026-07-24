@@ -98,9 +98,8 @@ type JobDefinition struct {
 	IsPathwaysJob bool
 	Pathways      PathwaysJobDefinition // Embedded struct for Pathways-specific args
 
-	RawMounts    []string
-	MountOptions string
-	Env          map[string]string
+	RawMounts []string
+	Env       map[string]string
 
 	Verbose bool
 }

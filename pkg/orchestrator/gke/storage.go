@@ -71,9 +71,7 @@ func (sm *StorageManager) ProcessMounts(mounts []string, job orchestrator.JobDef
 			MountPath: dest,
 			Type:      volType,
 			ReadOnly:  readOnly,
-		}
-		if volType == "gcsfuse" {
-			mountInfo.Options = options
+			Options:   options,
 		}
 		mountInfos = append(mountInfos, mountInfo)
 	}

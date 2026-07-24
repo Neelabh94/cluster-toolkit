@@ -188,6 +188,14 @@ func TestParseSingleVolume(t *testing.T) {
 			wantErr:    true,
 			wantErrSub: "options= is currently only supported for GCS",
 		},
+		{
+			name:     "valid gcsfuse with multiple comma-separated options",
+			input:    "gs://my-bucket;/data;options=logging:severity:info,enable-atomic-rename-object:true",
+			wantSrc:  "gs://my-bucket",
+			wantDest: "/data",
+			wantRO:   true,
+			wantOpts: "logging:severity:info,enable-atomic-rename-object:true",
+		},
 	}
 
 	for _, tc := range tests {

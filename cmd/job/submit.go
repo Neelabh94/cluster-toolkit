@@ -388,13 +388,15 @@ func validateGKENAPFlags() error {
 
 func validateMountOptions() error {
 	if mountOptions != "" {
-		if len(volumeStr) == 0 {
-			return fmt.Errorf("--mount-options requires at least one GCS mount")
-		}
+		hasGCS := false
 		for _, m := range volumeStr {
-			if !strings.HasPrefix(m, "gs://") {
-				return fmt.Errorf("--mount-options is currently only supported for GCS fuse volumes (gs://...)")
+			if strings.HasPrefix(m, "gs://") {
+				hasGCS = true
+				break
 			}
+		}
+		if !hasGCS {
+			return fmt.Errorf("--mount-options requires at least one GCS mount (gs://...)")
 		}
 	}
 	return nil

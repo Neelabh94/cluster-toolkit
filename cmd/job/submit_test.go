@@ -279,7 +279,7 @@ func setupSubmitTestEnv(t *testing.T) {
 	gkeScheduler = ""
 	platform = "linux/amd64"
 	gkeMtcEnabled = false
-	gkeMtcRamdiskDirectory = ""
+	gkeRamdiskDirectory = ""
 	awaitJobCompletion = false
 	priority = "medium"
 	isPathwaysJob = false
@@ -299,7 +299,7 @@ func setupSubmitTestEnv(t *testing.T) {
 		return &mockOrchestrator{}
 	}
 	gkeMtcEnabled = false
-	gkeMtcRamdiskDirectory = ""
+	gkeRamdiskDirectory = ""
 }
 
 type mockOrchestrator struct {
@@ -1005,7 +1005,7 @@ func TestSubmitCmd_PathwaysMTCFlags(t *testing.T) {
 		"--pathways-gcs-location", "gs://my-bucket",
 		"--compute-type", "n2-standard-4",
 		"--gke-mtc-enabled",
-		"--gke-mtc-ramdisk-dir", "/tmp/custom_mtc_dir",
+		"--gke-ramdisk-dir", "/tmp/custom_mtc_dir",
 	)
 
 	if err != nil {
@@ -1016,8 +1016,8 @@ func TestSubmitCmd_PathwaysMTCFlags(t *testing.T) {
 		t.Errorf("expected gkeMtcEnabled to be true")
 	}
 
-	if gkeMtcRamdiskDirectory != "/tmp/custom_mtc_dir" {
-		t.Errorf("expected gkeMtcRamdiskDirectory to be /tmp/custom_mtc_dir, got %s", gkeMtcRamdiskDirectory)
+	if gkeRamdiskDirectory != "/tmp/custom_mtc_dir" {
+		t.Errorf("expected gkeRamdiskDirectory to be /tmp/custom_mtc_dir, got %s", gkeRamdiskDirectory)
 	}
 
 }

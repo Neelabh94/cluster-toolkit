@@ -562,11 +562,21 @@ func (g *GKEOrchestrator) initializeJobSubmission(job *orchestrator.JobDefinitio
 	}
 
 	if job.GKEMTCEnabled {
-		if job.GKEMTCRamdiskDirectory == "" {
-			job.GKEMTCRamdiskDirectory = "/tmp/mtc_checkpoints"
+		if job.GKERamdiskDirectory == "" {
+			return fmt.Errorf("--gke-ramdisk-dir must be provided when --gke-mtc-enabled is true")
 		}
 		if g.clusterDesc.AddonsConfig == nil || g.clusterDesc.AddonsConfig.HighScaleCheckpointingConfig == nil || !g.clusterDesc.AddonsConfig.HighScaleCheckpointingConfig.Enabled {
 			return fmt.Errorf("Multi-Tier Checkpointing (MTC) requires the HighScaleCheckpointing addon to be enabled on the target GKE cluster. Please follow the official GKE documentation to enable this feature on your cluster before submitting jobs with --gke-mtc-enabled: https://cloud.google.com/kubernetes-engine/docs/how-to/multi-tier-checkpointing")
+		}
+		if g.dynClient != nil {
+			gvr := schema.GroupVersionResource{Group: "checkpointing.gke.io", Version: "v1alpha1", Resource: "checkpointconfigurations"}
+			crdList, err := g.dynClient.Resource(gvr).Namespace(job.GKENamespace).List(context.TODO(), metav1.ListOptions{})
+			if err != nil {
+				return fmt.Errorf("failed to verify CheckpointConfiguration CRD in namespace %s: %w", job.GKENamespace, err)
+			}
+			if len(crdList.Items) == 0 {
+				return fmt.Errorf("Multi-Tier Checkpointing (MTC) requires a CheckpointConfiguration CRD to be deployed in the target namespace (%s). Please deploy the CRD before submitting jobs with --gke-mtc-enabled", job.GKENamespace)
+			}
 		}
 	}
 
@@ -1429,7 +1439,7 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, comman
 		IsTPU:                         isTPU,
 		IsGPU:                         isGPU,
 		GKEMTCEnabled:                 opts.GKEMTCEnabled,
-		GKEMTCRamdiskDirectory:        opts.GKEMTCRamdiskDirectory,
+		GKERamdiskDirectory:           opts.GKERamdiskDirectory,
 	}
 }
 

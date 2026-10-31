@@ -22,6 +22,7 @@ import (
 	"hpc-toolkit/pkg/logging"
 	"hpc-toolkit/pkg/orchestrator"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 
@@ -102,6 +103,7 @@ func (g *GKEOrchestrator) GenerateGKEManifest(opts ManifestOptions, profile JobP
 
 	isTPU := tpuLimit != ""
 	isGPU := gpuLimit != ""
+	opts.Env = withDefaultCoordinatorEnv(opts.WorkloadName, opts.Env)
 	data := g.prepareJobSetTemplateData(opts, cmdSlice, resourcesString, isTPU, isGPU)
 
 	var buf bytes.Buffer
@@ -537,6 +539,9 @@ func (g *GKEOrchestrator) GeneratePathwaysManifest(job orchestrator.JobDefinitio
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("failed to execute pathways jobset template: %w", err)
 	}
+	if err := requirePathwaysMTCVolume(buf.String(), opts.GKEMTCEnabled); err != nil {
+		return "", err
+	}
 
 	manifest := assembleManifest(buf.String(), opts.AdditionalManifests)
 	if err := ValidateJobSetManifest(manifest); err != nil {
@@ -545,10 +550,24 @@ func (g *GKEOrchestrator) GeneratePathwaysManifest(job orchestrator.JobDefinitio
 	return manifest, nil
 }
 
+// requirePathwaysMTCVolume fails when MTC is enabled but the rendered Pathways
+// JobSet has no MTC CSI volume, as with a pathways_jobset.tmpl extracted from
+// an older gcluster version.
+func requirePathwaysMTCVolume(jobSet string, mtcEnabled bool) error {
+	if !mtcEnabled || strings.Contains(jobSet, multitierCheckpointCSIDriver) {
+		return nil
+	}
+	return fmt.Errorf("--gke-mtc-enabled is set but the Pathways manifest has no %s volume. If you use --gke-custom-templates-path, re-extract pathways_jobset.tmpl with 'gcluster job gke-template-extract' and re-apply your changes", multitierCheckpointCSIDriver)
+}
+
 func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, command []string, resourcesYAML string, isTPU, isGPU bool) jobSetTemplateData {
 	exclusiveTopology := ""
 	if !opts.IsDynamicSlicing && !opts.IsStaticSlicing {
-		exclusiveTopology = "alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool"
+		if opts.NodesPerSlice <= 1 {
+			exclusiveTopology = "alpha.jobset.sigs.k8s.io/exclusive-topology: kubernetes.io/hostname"
+		} else {
+			exclusiveTopology = "alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool"
+		}
 	}
 
 	workerBackoffLimit := opts.Pathways.MaxSliceRestarts * opts.NodesPerSlice
@@ -631,6 +650,23 @@ func (g *GKEOrchestrator) prepareJobSetTemplateData(opts ManifestOptions, comman
 		GKEMTCEnabled:                 opts.GKEMTCEnabled,
 		GKEMTCRamdiskDirectory:        opts.GKEMTCRamdiskDirectory,
 	}
+}
+
+// withDefaultCoordinatorEnv injects default MASTER_ADDR and WORKERS_0_HOSTNAME
+// pointing to the rank-0 pod of the JobSet. We populate these directly in the
+// container env instead of setting spec.coordinator to avoid generating the
+// jobset.sigs.k8s.io/coordinator label, which would exceed the 63-character
+// limit for workload names up to 28 characters.
+func withDefaultCoordinatorEnv(workloadName string, userEnv map[string]string) map[string]string {
+	if workloadName == "" {
+		return userEnv
+	}
+	coordinatorHost := fmt.Sprintf("%s-main-job-0-0.%s", workloadName, workloadName)
+	merged := make(map[string]string, len(userEnv)+2)
+	merged["MASTER_ADDR"] = coordinatorHost
+	merged["WORKERS_0_HOSTNAME"] = coordinatorHost
+	maps.Copy(merged, userEnv)
+	return merged
 }
 
 func sortedEnvVars(envMap map[string]string) []EnvVar {
